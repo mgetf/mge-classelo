@@ -230,32 +230,27 @@ forward void MGE_OnArenaScoreChange(int arena_index, int red_score, int blu_scor
 forward void MGE_OnArenaStatusChange(int arena_index, int old_status, int new_status);
 
 /**
- * Called after MGEMod finishes building the arena score HUD report for a client,
- * immediately before the text is drawn. External plugins may append or rewrite
- * the report buffer in place (up to maxlen characters including the null terminator).
+ * Called once per HUD score report, after both score lines' context has been
+ * built and before their text is rendered. lines[0] is the red/SLOT_ONE line,
+ * lines[1] is the blu/SLOT_TWO line (2v2 team lines still carry only one
+ * representative player, same as what's shown in the parentheses today).
+ * External plugins may rewrite lines[i].extraDisplay in place (e.g.
+ * "1500/1610", or any other per-line text: ranks, streaks, badges, etc.)
+ * without needing to parse HUD text. Multiple plugins can chain off this
+ * same forward - each one should read the current extraDisplay and
+ * append/rewrite it, rather than assuming it starts empty. extraDisplay
+ * text only ends up on screen for a given line if that line would
+ * otherwise show an ELO value (stats loaded, not a bot, ELO display
+ * enabled) - the forward still fires every time so plugins always see
+ * the full report context.
  *
  * @param arena_index    Arena whose score report is being shown
  * @param client         Client who will receive the HUD text
  * @param is_spectator   True if the client is spectating (or queued), false if actively fighting
- * @param report         Mutable score-report string (header + player/team lines)
- * @param maxlen         Size of the report buffer
+ * @param redLine        Mutable HUD line context for the red/SLOT_ONE line
+ * @param bluLine        Mutable HUD line context for the blu/SLOT_TWO line
  */
-forward void MGE_OnBuildHudScoreReport(int arena_index, int client, bool is_spectator, char[] report, int maxlen);
-
-/**
- * Called for each player's score line, right before the text inside the
- * parentheses (e.g. the "1500" in "PlayerName (1500): 3") is written.
- * External plugins may rewrite info.extraDisplay in place (e.g. "1500/1610",
- * or any other per-line text: ranks, streaks, badges, etc.) without needing
- * to parse HUD text. Multiple plugins can chain off this same forward -
- * each one should read the current info.extraDisplay and append/rewrite it,
- * rather than assuming it starts empty.
- * Only fired when a line would actually display line content for this
- * player (stats loaded, not a bot, ELO display enabled).
- *
- * @param info    Mutable HUD line context; only extraDisplay is meant to be rewritten
- */
-forward void MGE_OnFormatHudLine(MGEHudLineInfo info);
+forward void MGE_OnFormatHudLines(int arena_index, int client, bool is_spectator, MGEHudLineInfo redLine, MGEHudLineInfo bluLine);
 
 /**
  * Called when a map config file is missing

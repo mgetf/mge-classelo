@@ -11,7 +11,7 @@
 #include <clientprefs>
 #include <mge>
 
-#define PLUGIN_VERSION "0.2"
+#define PLUGIN_VERSION "0.3"
 #define DEFAULT_CLASS_ELO 1600
 #define MAX_TF_CLASSES 10
 #define MAXARENAS 63
@@ -515,8 +515,14 @@ void Frame_ProcessClassElo(int arena_index)
 
 // ===== HUD =====
 
+public void MGE_OnFormatHudLines(int arena_index, int client, bool is_spectator, MGEHudLineInfo redLine, MGEHudLineInfo bluLine)
+{
+    ApplyClassEloDisplay(redLine);
+    ApplyClassEloDisplay(bluLine);
+}
+
 // Rewrites the "(elo)" parenthetical into "(elo/classelo)" for the viewer's class-ELO preference
-public void MGE_OnFormatHudLine(MGEHudLineInfo info)
+void ApplyClassEloDisplay(MGEHudLineInfo info)
 {
     if (!IsValidClient(info.viewer) || !g_bShowClassElo[info.viewer])
         return;
