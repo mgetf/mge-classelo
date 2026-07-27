@@ -11,7 +11,7 @@
 #include <clientprefs>
 #include <mge>
 
-#define PLUGIN_VERSION "0.1"
+#define PLUGIN_VERSION "0.2"
 #define DEFAULT_CLASS_ELO 1600
 #define MAX_TF_CLASSES 10
 #define MAXARENAS 63
@@ -516,7 +516,7 @@ void Frame_ProcessClassElo(int arena_index)
 // ===== HUD =====
 
 // Rewrites the "(elo)" parenthetical into "(elo/classelo)" for the viewer's class-ELO preference
-public void MGE_OnFormatPlayerEloDisplay(MGEHudLineInfo info)
+public void MGE_OnFormatHudLine(MGEHudLineInfo info)
 {
     if (!IsValidClient(info.viewer) || !g_bShowClassElo[info.viewer])
         return;
@@ -539,8 +539,8 @@ public void MGE_OnFormatPlayerEloDisplay(MGEHudLineInfo info)
 
     int rating = g_iClassElo[player][view_as<int>(cls)];
     char globalEloText[16];
-    strcopy(globalEloText, sizeof(globalEloText), info.eloDisplay);
-    Format(info.eloDisplay, sizeof(info.eloDisplay), "%s/%d", globalEloText, rating);
+    strcopy(globalEloText, sizeof(globalEloText), info.extraDisplay);
+    Format(info.extraDisplay, sizeof(info.extraDisplay), "%s/%d", globalEloText, rating);
 }
 
 // ===== COMMANDS =====

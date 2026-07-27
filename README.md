@@ -6,7 +6,7 @@ This plugin does not modify MGEMod's global ELO system. It maintains its own per
 
 ## Requirements
 
-- [MGEMod](https://github.com/mgetf/MGEMod) with the `MGE_OnFormatPlayerEloDisplay` / `MGE_OnBuildHudScoreReport` HUD forwards (v3.1.0-beta29 or later)
+- [MGEMod](https://github.com/mgetf/MGEMod) with the `MGE_OnFormatHudLine` / `MGE_OnBuildHudScoreReport` HUD forwards (v3.1.0-beta29 or later)
 - SourceMod 1.11+
 
 ## How class ELO is calculated

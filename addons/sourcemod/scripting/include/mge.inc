@@ -49,7 +49,7 @@ enum struct MGEHudLineInfo
     int score;           // Current score being shown on this line
     int elo;             // Player's current global ELO rating (read-only reference)
     bool isSpectator;    // True if the viewer is spectating/queued rather than actively fighting
-    char eloDisplay[32]; // Mutable text placed inside the "(...)" on the HUD line; defaults to the ELO digits
+    char extraDisplay[32]; // Mutable text placed inside the "(...)" on the HUD line; defaults to the ELO digits, but any plugin (ELO, ranks, streaks, etc.) may rewrite it
 }
 
 // Arena Information Structure
@@ -244,15 +244,18 @@ forward void MGE_OnBuildHudScoreReport(int arena_index, int client, bool is_spec
 
 /**
  * Called for each player's score line, right before the text inside the
- * ELO parentheses (e.g. the "1500" in "PlayerName (1500): 3") is written.
- * External plugins may rewrite info.eloDisplay in place (e.g. "1500/1610")
- * to show additional or alternate rating info without needing to parse HUD text.
- * Only fired when an ELO value would actually be displayed for this line
- * (stats loaded, not a bot, ELO display enabled).
+ * parentheses (e.g. the "1500" in "PlayerName (1500): 3") is written.
+ * External plugins may rewrite info.extraDisplay in place (e.g. "1500/1610",
+ * or any other per-line text: ranks, streaks, badges, etc.) without needing
+ * to parse HUD text. Multiple plugins can chain off this same forward -
+ * each one should read the current info.extraDisplay and append/rewrite it,
+ * rather than assuming it starts empty.
+ * Only fired when a line would actually display line content for this
+ * player (stats loaded, not a bot, ELO display enabled).
  *
- * @param info    Mutable HUD line context; only eloDisplay is meant to be rewritten
+ * @param info    Mutable HUD line context; only extraDisplay is meant to be rewritten
  */
-forward void MGE_OnFormatPlayerEloDisplay(MGEHudLineInfo info);
+forward void MGE_OnFormatHudLine(MGEHudLineInfo info);
 
 /**
  * Called when a map config file is missing
