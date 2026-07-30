@@ -27,7 +27,7 @@ jobs:
     - name: Compile plugins
       run: |
         pwd
-        spcomp -i"./addons/sourcemod/scripting/include/" addons/sourcemod/scripting/mge_classelo.sp -o ./addons/sourcemod/plugins/mge_classelo.smx
+        spcomp -i"./scripting/include/" scripting/mge_classelo.sp -o ./plugins/mge_classelo.smx
         ls -la
 
     - name: Zip packages
