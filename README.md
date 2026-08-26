@@ -36,11 +36,24 @@ The plugin listens for `MGE_OnPlayerELOChange` rather than `MGE_On1v1MatchEnd`, 
 |---|---|
 | `sm_classelo` | Toggle your own per-class ELO display on the MGE HUD (saved as a client cookie) |
 
+## Rating Engines
+
+Per-class ratings support two pluggable rating engines, selected via `mge_classelo_rating_engine`. This is fully independent from MGEMod core's own `mgemod_rating_engine` - either plugin can run Elo while the other runs Glicko-2, with no conflict.
+
+* **Elo (default)**: the original K-factor formula this plugin has always used. Zero behavior change.
+* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core.
+
+The calibration defaults are deliberately different from MGEMod core's Glicko-2 engine, because a single class is played far less often than the game overall (a player might have 500 global duels but only 20 as an off-meta class). With the same inactivity window as the global engine, a settled per-class rating could get marked "provisional" again just from a couple of weeks of not queueing that class. `mge_classelo_glicko_period_days` defaults to a wider window (7 days instead of 1) and `mge_classelo_glicko_provisional_rd` defaults slightly looser (250 instead of 200) to account for this.
+
 ## ConVars
 
 | ConVar | Default | Description |
 |---|---|---|
 | `mge_classelo_dbconfig` | `mgemod` | Name of the `databases.cfg` entry to use. Falls back to SQLite (`storage-local`) if not found. |
+| `mge_classelo_rating_engine` | `elo` | Rating engine used to score per-class duels: `elo` (default) or `glicko2` (opt-in). |
+| `mge_classelo_glicko_tau` | `0.5` | Glicko-2 system constant controlling how fast per-class volatility reacts to surprising results. Only used when `mge_classelo_rating_engine` is `glicko2`. |
+| `mge_classelo_glicko_period_days` | `7.0` | Days considered one Glicko-2 rating period for per-class RD inflation due to inactivity. Only used when `mge_classelo_rating_engine` is `glicko2`. |
+| `mge_classelo_glicko_provisional_rd` | `250.0` | RD threshold above which a per-class Glicko-2 rating is considered provisional (shown with a `?` suffix on the HUD). Only used when `mge_classelo_rating_engine` is `glicko2`. |
 
 ## Installation
 

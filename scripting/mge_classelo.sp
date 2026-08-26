@@ -11,9 +11,9 @@
 #include <clientprefs>
 #include <mge>
 
-#define DEBUG 1
+#define DEBUG 0
 
-#define PLUGIN_VERSION "0.3.2"
+#define PLUGIN_VERSION "0.4"
 #define DEFAULT_CLASS_ELO 1600
 #define MAX_TF_CLASSES 10
 #define MAXARENAS 63
@@ -30,10 +30,42 @@ public Plugin myinfo =
 Database g_DB;
 ConVar g_cvDBConfig;
 
+// ===== RATING ENGINE (Elo default, Glicko-2 opt-in) =====
+
+enum ClassRatingEngine
+{
+    CLASS_RATING_ENGINE_ELO = 0,
+    CLASS_RATING_ENGINE_GLICKO2 = 1
+}
+
+ClassRatingEngine g_eClassRatingEngine;
+
+ConVar g_cvRatingEngine;
+ConVar g_cvGlickoTau;
+ConVar g_cvGlickoPeriodDays;
+ConVar g_cvGlickoProvisionalRd;
+
+float g_fGlickoTau;
+float g_fGlickoPeriodDays;
+float g_fGlickoProvisionalRd;
+
+#define CLASS_GLICKO2_SCALE               173.7178
+#define CLASS_GLICKO2_MAX_RD              350.0
+#define CLASS_GLICKO2_DEFAULT_VOLATILITY  0.06
+#define CLASS_GLICKO2_CONVERGENCE_EPSILON 0.000001
+#define CLASS_GLICKO2_E                   2.718281828459045
+#define CLASS_GLICKO2_PI                  3.14159265358979323846
+
 int g_iClassElo[MAXPLAYERS + 1][MAX_TF_CLASSES];
 int g_iClassWins[MAXPLAYERS + 1][MAX_TF_CLASSES];
 int g_iClassLosses[MAXPLAYERS + 1][MAX_TF_CLASSES];
 bool g_bClassEloLoaded[MAXPLAYERS + 1];
+
+// Glicko-2 rating engine state (only meaningful when mge_classelo_rating_engine is "glicko2")
+bool g_bClassGlickoSeeded[MAXPLAYERS + 1][MAX_TF_CLASSES];
+float g_fClassRD[MAXPLAYERS + 1][MAX_TF_CLASSES];
+float g_fClassVolatility[MAXPLAYERS + 1][MAX_TF_CLASSES];
+int g_iClassLastPlayed[MAXPLAYERS + 1][MAX_TF_CLASSES];
 
 ArrayList g_alDuelClasses[MAXPLAYERS + 1];
 bool g_bDuelTracking[MAXPLAYERS + 1];
@@ -48,6 +80,17 @@ int g_iPendingLoser[MAXARENAS + 1];
 public void OnPluginStart()
 {
     g_cvDBConfig = CreateConVar("mge_classelo_dbconfig", "mgemod", "Name of databases.cfg entry for class ELO storage");
+
+    g_cvRatingEngine = CreateConVar("mge_classelo_rating_engine", "elo", "Rating engine used to score per-class duels: \"elo\" (default) or \"glicko2\" (opt-in). Independent from MGEMod core's own mgemod_rating_engine.");
+    g_cvGlickoTau = CreateConVar("mge_classelo_glicko_tau", "0.5", "Glicko-2 system constant controlling how fast per-class volatility reacts to surprising results. Only used when mge_classelo_rating_engine is \"glicko2\".", FCVAR_NONE, true, 0.2, true, 1.2);
+    g_cvGlickoPeriodDays = CreateConVar("mge_classelo_glicko_period_days", "7.0", "Number of days considered one Glicko-2 rating period for per-class RD inflation due to inactivity. Higher than MGEMod core's default since a single class is played far less often than the game overall. Only used when mge_classelo_rating_engine is \"glicko2\".", FCVAR_NONE, true, 0.5);
+    g_cvGlickoProvisionalRd = CreateConVar("mge_classelo_glicko_provisional_rd", "250.0", "RD threshold above which a per-class Glicko-2 rating is considered provisional. Only used when mge_classelo_rating_engine is \"glicko2\".", FCVAR_NONE, true, 50.0, true, 350.0);
+
+    g_cvRatingEngine.AddChangeHook(OnRatingConVarChanged);
+    g_cvGlickoTau.AddChangeHook(OnRatingConVarChanged);
+    g_cvGlickoPeriodDays.AddChangeHook(OnRatingConVarChanged);
+    g_cvGlickoProvisionalRd.AddChangeHook(OnRatingConVarChanged);
+    ReadRatingConVars();
 
     g_hShowClassEloCookie = new Cookie("mge_classelo_show", "Show per-class ELO on MGE HUD", CookieAccess_Public);
 
@@ -73,6 +116,22 @@ public void OnPluginStart()
         if (IsClientInGame(i) && !IsFakeClient(i) && IsClientAuthorized(i))
             LoadPlayerClassElo(i);
     }
+}
+
+void ReadRatingConVars()
+{
+    char sRatingEngine[16];
+    g_cvRatingEngine.GetString(sRatingEngine, sizeof(sRatingEngine));
+    g_eClassRatingEngine = StrEqual(sRatingEngine, "glicko2", false) ? CLASS_RATING_ENGINE_GLICKO2 : CLASS_RATING_ENGINE_ELO;
+
+    g_fGlickoTau = g_cvGlickoTau.FloatValue;
+    g_fGlickoPeriodDays = g_cvGlickoPeriodDays.FloatValue;
+    g_fGlickoProvisionalRd = g_cvGlickoProvisionalRd.FloatValue;
+}
+
+void OnRatingConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+    ReadRatingConVars();
 }
 
 public void OnPluginEnd()
@@ -296,16 +355,16 @@ void PrepareSQL()
     char query[512];
     if (StrEqual(ident, "sqlite", false))
     {
-        strcopy(query, sizeof(query), "CREATE TABLE IF NOT EXISTS mge_classelo_stats (steamid TEXT NOT NULL, class INTEGER NOT NULL, rating INTEGER NOT NULL DEFAULT 1600, wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, lastplayed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (steamid, class))");
+        strcopy(query, sizeof(query), "CREATE TABLE IF NOT EXISTS mge_classelo_stats (steamid TEXT NOT NULL, class INTEGER NOT NULL, rating INTEGER NOT NULL DEFAULT 1600, wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, lastplayed INTEGER NOT NULL DEFAULT 0, rd REAL, volatility REAL, PRIMARY KEY (steamid, class))");
     }
     else if (StrEqual(ident, "mysql", false))
     {
         g_DB.SetCharset("utf8mb4");
-        strcopy(query, sizeof(query), "CREATE TABLE IF NOT EXISTS mge_classelo_stats (steamid VARCHAR(32) NOT NULL, class INT NOT NULL, rating INT NOT NULL DEFAULT 1600, wins INT NOT NULL DEFAULT 0, losses INT NOT NULL DEFAULT 0, lastplayed INT NOT NULL DEFAULT 0, PRIMARY KEY (steamid, class))");
+        strcopy(query, sizeof(query), "CREATE TABLE IF NOT EXISTS mge_classelo_stats (steamid VARCHAR(32) NOT NULL, class INT NOT NULL, rating INT NOT NULL DEFAULT 1600, wins INT NOT NULL DEFAULT 0, losses INT NOT NULL DEFAULT 0, lastplayed INT NOT NULL DEFAULT 0, rd FLOAT, volatility FLOAT, PRIMARY KEY (steamid, class))");
     }
     else if (StrEqual(ident, "pgsql", false))
     {
-        strcopy(query, sizeof(query), "CREATE TABLE IF NOT EXISTS mge_classelo_stats (steamid VARCHAR(32) NOT NULL, class INT NOT NULL, rating INT NOT NULL DEFAULT 1600, wins INT NOT NULL DEFAULT 0, losses INT NOT NULL DEFAULT 0, lastplayed INT NOT NULL DEFAULT 0, PRIMARY KEY (steamid, class))");
+        strcopy(query, sizeof(query), "CREATE TABLE IF NOT EXISTS mge_classelo_stats (steamid VARCHAR(32) NOT NULL, class INT NOT NULL, rating INT NOT NULL DEFAULT 1600, wins INT NOT NULL DEFAULT 0, losses INT NOT NULL DEFAULT 0, lastplayed INT NOT NULL DEFAULT 0, rd REAL, volatility REAL, PRIMARY KEY (steamid, class))");
     }
     else
     {
@@ -334,6 +393,49 @@ void SQL_OnCreateTable(Database db, DBResultSet results, const char[] error, any
 #else
     LogMessage("[mge_classelo] Database ready");
 #endif
+
+    AddGlickoColumnsIfMissing();
+}
+
+// Adds the rd/volatility columns for installs that created the table before Glicko-2 support
+// existed. Tolerates "column already exists" errors from every supported driver, since this
+// runs unconditionally on every plugin start.
+void AddGlickoColumnsIfMissing()
+{
+    char ident[16];
+    g_DB.Driver.GetIdentifier(ident, sizeof(ident));
+
+    char rdQuery[256], volatilityQuery[256];
+    if (StrEqual(ident, "mysql", false))
+    {
+        strcopy(rdQuery, sizeof(rdQuery), "ALTER TABLE mge_classelo_stats ADD COLUMN rd FLOAT DEFAULT NULL");
+        strcopy(volatilityQuery, sizeof(volatilityQuery), "ALTER TABLE mge_classelo_stats ADD COLUMN volatility FLOAT DEFAULT NULL");
+    }
+    else
+    {
+        strcopy(rdQuery, sizeof(rdQuery), "ALTER TABLE mge_classelo_stats ADD COLUMN rd REAL DEFAULT NULL");
+        strcopy(volatilityQuery, sizeof(volatilityQuery), "ALTER TABLE mge_classelo_stats ADD COLUMN volatility REAL DEFAULT NULL");
+    }
+
+    g_DB.Query(SQL_OnAddGlickoColumn, rdQuery);
+    g_DB.Query(SQL_OnAddGlickoColumn, volatilityQuery);
+}
+
+void SQL_OnAddGlickoColumn(Database db, DBResultSet results, const char[] error, any data)
+{
+    if (results != null)
+        return;
+
+    if (StrContains(error, "duplicate column", false) != -1
+        || StrContains(error, "already exists", false) != -1)
+    {
+#if DEBUG
+        ClassElo_Log("db", "Glicko column already present (expected on repeat starts): %s", error);
+#endif
+        return;
+    }
+
+    LogError("[mge_classelo] Failed to add Glicko-2 column: %s", error);
 }
 
 void LoadPlayerClassElo(int client)
@@ -360,12 +462,16 @@ void LoadPlayerClassElo(int client)
         g_iClassElo[client][c] = DEFAULT_CLASS_ELO;
         g_iClassWins[client][c] = 0;
         g_iClassLosses[client][c] = 0;
+        g_bClassGlickoSeeded[client][c] = false;
+        g_fClassRD[client][c] = 0.0;
+        g_fClassVolatility[client][c] = 0.0;
+        g_iClassLastPlayed[client][c] = 0;
     }
     g_bClassEloLoaded[client] = false;
 
     char query[256];
     g_DB.Format(query, sizeof(query),
-        "SELECT class, rating, wins, losses FROM mge_classelo_stats WHERE steamid = '%s'",
+        "SELECT class, rating, wins, losses, rd, volatility, lastplayed FROM mge_classelo_stats WHERE steamid = '%s'",
         steamid);
 
 #if DEBUG
@@ -411,6 +517,21 @@ void SQL_OnPlayerClassEloReceived(Database db, DBResultSet results, const char[]
         g_iClassElo[client][classIdx] = results.FetchInt(1);
         g_iClassWins[client][classIdx] = results.FetchInt(2);
         g_iClassLosses[client][classIdx] = results.FetchInt(3);
+
+        if (results.IsFieldNull(4))
+        {
+            g_bClassGlickoSeeded[client][classIdx] = false;
+            g_fClassRD[client][classIdx] = 0.0;
+            g_fClassVolatility[client][classIdx] = 0.0;
+        }
+        else
+        {
+            g_bClassGlickoSeeded[client][classIdx] = true;
+            g_fClassRD[client][classIdx] = results.FetchFloat(4);
+            g_fClassVolatility[client][classIdx] = results.FetchFloat(5);
+        }
+        g_iClassLastPlayed[client][classIdx] = results.FetchInt(6);
+
         rows++;
 
 #if DEBUG
@@ -453,7 +574,28 @@ void PersistClassElo(int client, TFClassType classType)
     g_DB.Driver.GetIdentifier(ident, sizeof(ident));
 
     char query[512];
-    if (StrEqual(ident, "sqlite", false))
+
+    // Under Glicko-2, rd/volatility are also persisted every duel. Under Elo they're left
+    // untouched (stay NULL for players who never touched the glicko2 engine for this class).
+    if (g_eClassRatingEngine == CLASS_RATING_ENGINE_GLICKO2)
+    {
+        float rd = g_fClassRD[client][classIdx];
+        float volatility = g_fClassVolatility[client][classIdx];
+
+        if (StrEqual(ident, "sqlite", false))
+        {
+            g_DB.Format(query, sizeof(query), "INSERT INTO mge_classelo_stats (steamid, class, rating, wins, losses, lastplayed, rd, volatility) VALUES ('%s', %d, %d, %d, %d, %d, %f, %f) ON CONFLICT(steamid, class) DO UPDATE SET rating = excluded.rating, wins = excluded.wins, losses = excluded.losses, lastplayed = excluded.lastplayed, rd = excluded.rd, volatility = excluded.volatility", steamid, classIdx, rating, wins, losses, timestamp, rd, volatility);
+        }
+        else if (StrEqual(ident, "pgsql", false))
+        {
+            g_DB.Format(query, sizeof(query), "INSERT INTO mge_classelo_stats (steamid, class, rating, wins, losses, lastplayed, rd, volatility) VALUES ('%s', %d, %d, %d, %d, %d, %f, %f) ON CONFLICT (steamid, class) DO UPDATE SET rating = EXCLUDED.rating, wins = EXCLUDED.wins, losses = EXCLUDED.losses, lastplayed = EXCLUDED.lastplayed, rd = EXCLUDED.rd, volatility = EXCLUDED.volatility", steamid, classIdx, rating, wins, losses, timestamp, rd, volatility);
+        }
+        else
+        {
+            g_DB.Format(query, sizeof(query), "INSERT INTO mge_classelo_stats (steamid, class, rating, wins, losses, lastplayed, rd, volatility) VALUES ('%s', %d, %d, %d, %d, %d, %f, %f) ON DUPLICATE KEY UPDATE rating = VALUES(rating), wins = VALUES(wins), losses = VALUES(losses), lastplayed = VALUES(lastplayed), rd = VALUES(rd), volatility = VALUES(volatility)", steamid, classIdx, rating, wins, losses, timestamp, rd, volatility);
+        }
+    }
+    else if (StrEqual(ident, "sqlite", false))
     {
         g_DB.Format(query, sizeof(query), "INSERT INTO mge_classelo_stats (steamid, class, rating, wins, losses, lastplayed) VALUES ('%s', %d, %d, %d, %d, %d) ON CONFLICT(steamid, class) DO UPDATE SET rating = excluded.rating, wins = excluded.wins, losses = excluded.losses, lastplayed = excluded.lastplayed", steamid, classIdx, rating, wins, losses, timestamp);
     }
@@ -692,6 +834,281 @@ public void MGE_On1v1MatchEnd(int arena_index, int winner, int loser, int winner
 }
 #endif
 
+// ===== RATING ENGINE DISPATCHER (Elo default, Glicko-2 opt-in) =====
+//
+// Independent from MGEMod core's own rating engine dispatcher. Same design principle
+// (switch-on-enum, Elo default with zero behavior change) but its own implementation,
+// its own convars, and its own calibration - per-class match volume is much lower than
+// the global mode, so inactivity decay and the "provisional" threshold need looser
+// defaults (see mge_classelo_glicko_period_days / mge_classelo_glicko_provisional_rd).
+
+// Single entry point Frame_ProcessClassElo calls to apply a finished duel's result to
+// both players' per-class ratings. Callers never know which engine actually computed
+// the new numbers.
+void ClassRating_ReportResult(int winner, TFClassType winnerClass, int loser, TFClassType loserClass)
+{
+    switch (g_eClassRatingEngine)
+    {
+        case CLASS_RATING_ENGINE_GLICKO2:
+            ClassEngine_Glicko2_OnMatchResult(winner, winnerClass, loser, loserClass);
+        default:
+            ClassEngine_Elo_OnMatchResult(winner, winnerClass, loser, loserClass);
+    }
+}
+
+// Returns the number to show/print for a player's class rating, regardless of active engine.
+// Elo: the raw per-class rating. Glicko-2: a conservative rating (rating - 2*rd).
+int ClassRating_GetDisplayValue(int client, TFClassType classType)
+{
+    int classIdx = view_as<int>(classType);
+    if (g_eClassRatingEngine == CLASS_RATING_ENGINE_GLICKO2 && g_bClassGlickoSeeded[client][classIdx])
+        return RoundToNearest(float(g_iClassElo[client][classIdx]) - 2.0 * g_fClassRD[client][classIdx]);
+
+    return g_iClassElo[client][classIdx];
+}
+
+// Whether this player's per-class rating is still provisional (not enough duels in this
+// specific class, or too much inactivity, to trust it). Always false under Elo.
+bool ClassRating_IsProvisional(int client, TFClassType classType)
+{
+    int classIdx = view_as<int>(classType);
+    if (g_eClassRatingEngine != CLASS_RATING_ENGINE_GLICKO2)
+        return false;
+
+    if (!g_bClassGlickoSeeded[client][classIdx])
+        return true;
+
+    return g_fClassRD[client][classIdx] > g_fGlickoProvisionalRd;
+}
+
+// ===== ELO ENGINE =====
+//
+// Identical math to what Frame_ProcessClassElo used to compute inline. Zero behavior
+// change for servers that never touch mge_classelo_rating_engine.
+void ClassEngine_Elo_OnMatchResult(int winner, TFClassType winnerClass, int loser, TFClassType loserClass)
+{
+    int wIdx = view_as<int>(winnerClass);
+    int lIdx = view_as<int>(loserClass);
+
+    int winnerRating = g_iClassElo[winner][wIdx];
+    int loserRating = g_iClassElo[loser][lIdx];
+
+    float expected = 1.0 / (Pow(10.0, float(winnerRating - loserRating) / 400.0) + 1.0);
+    int kWin = (winnerRating >= 2400) ? 10 : 15;
+    int kLose = (loserRating >= 2400) ? 10 : 15;
+    int winnerDelta = RoundFloat(float(kWin) * expected);
+    int loserDelta = RoundFloat(float(kLose) * expected);
+
+    g_iClassElo[winner][wIdx] += winnerDelta;
+    g_iClassElo[loser][lIdx] -= loserDelta;
+    g_iClassWins[winner][wIdx]++;
+    g_iClassLosses[loser][lIdx]++;
+
+#if DEBUG
+    char w[96], l[96], wc[16], lc[16];
+    ClassElo_DescribeClient(winner, w, sizeof(w));
+    ClassElo_DescribeClient(loser, l, sizeof(l));
+    ClassToName(winnerClass, wc, sizeof(wc));
+    ClassToName(loserClass, lc, sizeof(lc));
+    ClassElo_Log("compute", "APPLIED(elo) winner=%s class=%s %d+%d=%d (k=%d) | loser=%s class=%s %d-%d=%d (k=%d) expected=%.4f",
+        w, wc, winnerRating, winnerDelta, g_iClassElo[winner][wIdx], kWin,
+        l, lc, loserRating, loserDelta, g_iClassElo[loser][lIdx], kLose,
+        expected);
+#endif
+}
+
+// ===== GLICKO-2 ENGINE =====
+//
+// Opt-in (mge_classelo_rating_engine "glicko2"). Own implementation of Glickman's published
+// algorithm (http://www.glicko.net/glicko/glicko2.pdf), independent from MGEMod core's copy -
+// same public formulas, no shared code, own calibration convars. No 2v2 handling: this
+// plugin has never tracked 2v2 class ratings.
+
+// Seeds a class rating's RD/volatility on first contact with the Glicko-2 engine. The
+// rating itself is left untouched (whatever Elo value it already had, or the 1600 default).
+void ClassGlicko2_EnsureSeeded(int client, int classIdx)
+{
+    if (g_bClassGlickoSeeded[client][classIdx])
+        return;
+
+    g_fClassRD[client][classIdx] = CLASS_GLICKO2_MAX_RD;
+    g_fClassVolatility[client][classIdx] = CLASS_GLICKO2_DEFAULT_VOLATILITY;
+    g_bClassGlickoSeeded[client][classIdx] = true;
+}
+
+// Inflates a class RD to reflect uncertainty accumulated while that specific class wasn't
+// played, following Glickman's step 1 (applied once per full rating period skipped).
+void ClassGlicko2_ApplyInactivityDecay(int client, int classIdx, int now)
+{
+    if (g_iClassLastPlayed[client][classIdx] <= 0 || g_fGlickoPeriodDays <= 0.0)
+        return;
+
+    float periodSeconds = g_fGlickoPeriodDays * 86400.0;
+    int elapsedPeriods = RoundToFloor(float(now - g_iClassLastPlayed[client][classIdx]) / periodSeconds);
+    if (elapsedPeriods <= 0)
+        return;
+
+    float phi = g_fClassRD[client][classIdx] / CLASS_GLICKO2_SCALE;
+    float sigma = g_fClassVolatility[client][classIdx];
+    float inflatedPhi = SquareRoot((phi * phi) + (float(elapsedPeriods) * sigma * sigma));
+
+    float maxPhi = CLASS_GLICKO2_MAX_RD / CLASS_GLICKO2_SCALE;
+    if (inflatedPhi > maxPhi)
+        inflatedPhi = maxPhi;
+
+    g_fClassRD[client][classIdx] = inflatedPhi * CLASS_GLICKO2_SCALE;
+}
+
+// g(phi): discounts an opponent's rating impact by their own uncertainty.
+float ClassGlicko2_G(float phi)
+{
+    return 1.0 / SquareRoot(1.0 + ((3.0 * phi * phi) / (CLASS_GLICKO2_PI * CLASS_GLICKO2_PI)));
+}
+
+// E(mu, mu_j, phi_j): expected score against an opponent.
+float ClassGlicko2_E(float mu, float otherMu, float otherPhi)
+{
+    return 1.0 / (1.0 + Pow(CLASS_GLICKO2_E, -ClassGlicko2_G(otherPhi) * (mu - otherMu)));
+}
+
+// f(x): the function whose root is the new volatility (in ln(variance) space), solved
+// below via the Illinois algorithm, per Glickman's step 5.
+float ClassGlicko2_F(float delta, float phi, float v, float x, float a, float tau)
+{
+    float ex = Pow(CLASS_GLICKO2_E, x);
+    float num = ex * ((delta * delta) - (phi * phi) - v - ex);
+    float den = 2.0 * Pow((phi * phi) + v + ex, 2.0);
+    return (num / den) - ((x - a) / (tau * tau));
+}
+
+// Pure Glicko-2 update for a single class-rating against a single opponent's class-rating
+// in one rating period. Operates entirely on the Elo-like display scale (rating ~1600,
+// rd in points). Does not read or write any global state.
+void ClassGlicko2_ComputeUpdate(float rating, float rd, float volatility, float oppRating, float oppRd, float score,
+    float &newRating, float &newRd, float &newVolatility)
+{
+    float mu = (rating - 1500.0) / CLASS_GLICKO2_SCALE;
+    float phi = rd / CLASS_GLICKO2_SCALE;
+    float sigma = volatility;
+
+    float oppMu = (oppRating - 1500.0) / CLASS_GLICKO2_SCALE;
+    float oppPhi = oppRd / CLASS_GLICKO2_SCALE;
+
+    float g = ClassGlicko2_G(oppPhi);
+    float e = ClassGlicko2_E(mu, oppMu, oppPhi);
+    float v = 1.0 / (g * g * e * (1.0 - e));
+    float delta = v * g * (score - e);
+
+    float a = Logarithm(sigma * sigma, CLASS_GLICKO2_E);
+    float tau = g_fGlickoTau;
+
+    float A = a;
+    float B;
+    if ((delta * delta) > (phi * phi) + v)
+    {
+        B = Logarithm((delta * delta) - (phi * phi) - v, CLASS_GLICKO2_E);
+    }
+    else
+    {
+        int k = 1;
+        B = a - (float(k) * tau);
+        while (ClassGlicko2_F(delta, phi, v, B, a, tau) < 0.0)
+        {
+            k++;
+            B = a - (float(k) * tau);
+        }
+    }
+
+    float fA = ClassGlicko2_F(delta, phi, v, A, a, tau);
+    float fB = ClassGlicko2_F(delta, phi, v, B, a, tau);
+
+    int iterations = 0;
+    while (FloatAbs(B - A) > CLASS_GLICKO2_CONVERGENCE_EPSILON && iterations < 100)
+    {
+        float C = A + (((A - B) * fA) / (fB - fA));
+        float fC = ClassGlicko2_F(delta, phi, v, C, a, tau);
+
+        if ((fC * fB) < 0.0)
+        {
+            A = B;
+            fA = fB;
+        }
+        else
+        {
+            fA = fA / 2.0;
+        }
+
+        B = C;
+        fB = fC;
+        iterations++;
+    }
+
+    float newSigma = Pow(CLASS_GLICKO2_E, A / 2.0);
+    float phiStar = SquareRoot((phi * phi) + (newSigma * newSigma));
+    float newPhi = 1.0 / SquareRoot((1.0 / (phiStar * phiStar)) + (1.0 / v));
+    float newMu = mu + ((newPhi * newPhi) * g * (score - e));
+
+    newRating = (newMu * CLASS_GLICKO2_SCALE) + 1500.0;
+    float newRdRaw = newPhi * CLASS_GLICKO2_SCALE;
+    newRd = (newRdRaw > CLASS_GLICKO2_MAX_RD) ? CLASS_GLICKO2_MAX_RD : newRdRaw;
+    newVolatility = newSigma;
+}
+
+// Calculates Glicko-2 class ratings for a finished 1v1 duel and updates in-memory state.
+// Persistence and chat messages stay in Frame_ProcessClassElo, same as the Elo engine.
+void ClassEngine_Glicko2_OnMatchResult(int winner, TFClassType winnerClass, int loser, TFClassType loserClass)
+{
+    int wIdx = view_as<int>(winnerClass);
+    int lIdx = view_as<int>(loserClass);
+    int now = GetTime();
+
+    ClassGlicko2_EnsureSeeded(winner, wIdx);
+    ClassGlicko2_EnsureSeeded(loser, lIdx);
+    ClassGlicko2_ApplyInactivityDecay(winner, wIdx, now);
+    ClassGlicko2_ApplyInactivityDecay(loser, lIdx, now);
+
+    int winnerPreviousRating = g_iClassElo[winner][wIdx];
+    int loserPreviousRating = g_iClassElo[loser][lIdx];
+    float winnerPreviousRd = g_fClassRD[winner][wIdx];
+    float loserPreviousRd = g_fClassRD[loser][lIdx];
+#if DEBUG
+    float winnerPreviousVolatility = g_fClassVolatility[winner][wIdx];
+    float loserPreviousVolatility = g_fClassVolatility[loser][lIdx];
+#endif
+
+    float newWinnerRating, newWinnerRd, newWinnerVolatility;
+    float newLoserRating, newLoserRd, newLoserVolatility;
+
+    ClassGlicko2_ComputeUpdate(float(winnerPreviousRating), winnerPreviousRd, g_fClassVolatility[winner][wIdx],
+        float(loserPreviousRating), loserPreviousRd, 1.0, newWinnerRating, newWinnerRd, newWinnerVolatility);
+    ClassGlicko2_ComputeUpdate(float(loserPreviousRating), loserPreviousRd, g_fClassVolatility[loser][lIdx],
+        float(winnerPreviousRating), winnerPreviousRd, 0.0, newLoserRating, newLoserRd, newLoserVolatility);
+
+    g_iClassElo[winner][wIdx] = RoundFloat(newWinnerRating);
+    g_fClassRD[winner][wIdx] = newWinnerRd;
+    g_fClassVolatility[winner][wIdx] = newWinnerVolatility;
+    g_iClassLastPlayed[winner][wIdx] = now;
+
+    g_iClassElo[loser][lIdx] = RoundFloat(newLoserRating);
+    g_fClassRD[loser][lIdx] = newLoserRd;
+    g_fClassVolatility[loser][lIdx] = newLoserVolatility;
+    g_iClassLastPlayed[loser][lIdx] = now;
+
+    g_iClassWins[winner][wIdx]++;
+    g_iClassLosses[loser][lIdx]++;
+
+#if DEBUG
+    char w[96], l[96], wc[16], lc[16];
+    ClassElo_DescribeClient(winner, w, sizeof(w));
+    ClassElo_DescribeClient(loser, l, sizeof(l));
+    ClassToName(winnerClass, wc, sizeof(wc));
+    ClassToName(loserClass, lc, sizeof(lc));
+    ClassElo_Log("compute", "APPLIED(glicko2) winner=%s class=%s rating %d->%d rd %.1f->%.1f vol %.5f->%.5f | loser=%s class=%s rating %d->%d rd %.1f->%.1f vol %.5f->%.5f",
+        w, wc, winnerPreviousRating, g_iClassElo[winner][wIdx], winnerPreviousRd, g_fClassRD[winner][wIdx], winnerPreviousVolatility, g_fClassVolatility[winner][wIdx],
+        l, lc, loserPreviousRating, g_iClassElo[loser][lIdx], loserPreviousRd, g_fClassRD[loser][lIdx], loserPreviousVolatility, g_fClassVolatility[loser][lIdx]);
+#endif
+}
+
 // ===== ELO CALCULATION =====
 
 public void MGE_OnPlayerELOChange(int client, int old_elo, int new_elo, int arena_index)
@@ -834,53 +1251,41 @@ void Frame_ProcessClassElo(int arena_index)
         return;
     }
 
-    int wIdx = view_as<int>(winnerClass);
-    int lIdx = view_as<int>(loserClass);
-
-    int winnerRating = g_iClassElo[winner][wIdx];
-    int loserRating = g_iClassElo[loser][lIdx];
-
-    float expected = 1.0 / (Pow(10.0, float(winnerRating - loserRating) / 400.0) + 1.0);
-    int kWin = (winnerRating >= 2400) ? 10 : 15;
-    int kLose = (loserRating >= 2400) ? 10 : 15;
-    int winnerDelta = RoundFloat(float(kWin) * expected);
-    int loserDelta = RoundFloat(float(kLose) * expected);
-
-#if DEBUG
-    int winnerBefore = winnerRating;
-    int loserBefore = loserRating;
-#endif
-
-    g_iClassElo[winner][wIdx] += winnerDelta;
-    g_iClassElo[loser][lIdx] -= loserDelta;
-    g_iClassWins[winner][wIdx]++;
-    g_iClassLosses[loser][lIdx]++;
-
     char wc[16];
     char lc[16];
     ClassToName(winnerClass, wc, sizeof(wc));
     ClassToName(loserClass, lc, sizeof(lc));
+
+    int winnerDisplayBefore = ClassRating_GetDisplayValue(winner, winnerClass);
+    int loserDisplayBefore = ClassRating_GetDisplayValue(loser, loserClass);
+
+    ClassRating_ReportResult(winner, winnerClass, loser, loserClass);
+
+    int winnerDisplayAfter = ClassRating_GetDisplayValue(winner, winnerClass);
+    int loserDisplayAfter = ClassRating_GetDisplayValue(loser, loserClass);
+    int winnerDelta = winnerDisplayAfter - winnerDisplayBefore;
+    int loserDelta = loserDisplayBefore - loserDisplayAfter;
 
 #if DEBUG
     char w[96];
     char l[96];
     ClassElo_DescribeClient(winner, w, sizeof(w));
     ClassElo_DescribeClient(loser, l, sizeof(l));
-    ClassElo_Log("compute", "APPLIED arena=%d winner=%s class=%s %d+%d=%d (k=%d) | loser=%s class=%s %d-%d=%d (k=%d) expected=%.4f loser_switched=%d",
+    ClassElo_Log("compute", "REPORTED arena=%d winner=%s class=%s %d->%d (%+d) | loser=%s class=%s %d->%d (%+d) loser_switched=%d",
         arena_index,
-        w, wc, winnerBefore, winnerDelta, g_iClassElo[winner][wIdx], kWin,
-        l, lc, loserBefore, loserDelta, g_iClassElo[loser][lIdx], kLose,
-        expected, loserSwitched);
+        w, wc, winnerDisplayBefore, winnerDisplayAfter, winnerDelta,
+        l, lc, loserDisplayBefore, loserDisplayAfter, -loserDelta,
+        loserSwitched);
 #endif
 
     PersistClassElo(winner, winnerClass);
     PersistClassElo(loser, loserClass);
 
     if (g_bShowClassElo[winner])
-        PrintToChat(winner, "[Class ELO] +%d %s (%d)", winnerDelta, wc, g_iClassElo[winner][wIdx]);
+        PrintToChat(winner, "[Class ELO] +%d %s (%d)", winnerDelta, wc, winnerDisplayAfter);
 
     if (g_bShowClassElo[loser])
-        PrintToChat(loser, "[Class ELO] -%d %s (%d)", loserDelta, lc, g_iClassElo[loser][lIdx]);
+        PrintToChat(loser, "[Class ELO] -%d %s (%d)", loserDelta, lc, loserDisplayAfter);
 
     ClearDuelClasses(winner);
     ClearDuelClasses(loser);
@@ -918,10 +1323,14 @@ void ApplyClassEloDisplay(MGEHudLineInfo info)
     if (cls == TFClass_Unknown)
         return;
 
-    int rating = g_iClassElo[player][view_as<int>(cls)];
+    int rating = ClassRating_GetDisplayValue(player, cls);
     char globalEloText[16];
     strcopy(globalEloText, sizeof(globalEloText), info.extraDisplay);
-    Format(info.extraDisplay, sizeof(info.extraDisplay), "%s/%d", globalEloText, rating);
+
+    if (ClassRating_IsProvisional(player, cls))
+        Format(info.extraDisplay, sizeof(info.extraDisplay), "%s/%d?", globalEloText, rating);
+    else
+        Format(info.extraDisplay, sizeof(info.extraDisplay), "%s/%d", globalEloText, rating);
 }
 
 // ===== COMMANDS =====
@@ -959,6 +1368,10 @@ void ResetClientState(int client)
         g_iClassElo[client][c] = DEFAULT_CLASS_ELO;
         g_iClassWins[client][c] = 0;
         g_iClassLosses[client][c] = 0;
+        g_bClassGlickoSeeded[client][c] = false;
+        g_fClassRD[client][c] = 0.0;
+        g_fClassVolatility[client][c] = 0.0;
+        g_iClassLastPlayed[client][c] = 0;
     }
 }
 
