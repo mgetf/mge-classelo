@@ -58,16 +58,16 @@ The calibration defaults are deliberately different from MGEMod core's Glicko-2 
 ## Installation
 
 1. Make sure MGEMod is installed and includes the HUD forwards this plugin depends on.
-2. Drop `addons/sourcemod/plugins/mge_classelo.smx` into your server's `addons/sourcemod/plugins/` folder.
+2. Drop `plugins/mge_classelo.smx` into your server's `addons/sourcemod/plugins/` folder.
 3. (Optional) Set `mge_classelo_dbconfig` if you want class ELO stored in a specific database config other than the default `mgemod` entry.
 
 ## Building from source
 
 ```
-spcomp -i"./addons/sourcemod/scripting/include/" addons/sourcemod/scripting/mge_classelo.sp -o ./addons/sourcemod/plugins/mge_classelo.smx
+spcomp -i"./scripting/include/" scripting/mge_classelo.sp -o ./plugins/mge_classelo.smx
 ```
 
-`addons/sourcemod/scripting/include/mge.inc` is a vendored copy of MGEMod's public API header, kept in sync with the MGEMod version this plugin targets.
+`scripting/include/mge.inc` is a vendored copy of MGEMod's public API header, kept in sync with the MGEMod version this plugin targets.
 
 ## License
 

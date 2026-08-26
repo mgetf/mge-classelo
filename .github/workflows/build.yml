@@ -5,14 +5,22 @@ on:
   push:
     tags:
     - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to publish this build as (e.g. v0.4)'
+        required: true
+        type: string
 
 jobs:
   run:
     name: Run action
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     # skip build on '[ci skip]'
-    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[ci skip]') }}
 
     steps:
     - uses: actions/checkout@v4
@@ -26,21 +34,23 @@ jobs:
 
     - name: Compile plugins
       run: |
-        pwd
+        mkdir -p plugins
         spcomp -i"./scripting/include/" scripting/mge_classelo.sp -o ./plugins/mge_classelo.smx
-        ls -la
+        test -s plugins/mge_classelo.smx
+        ls -la plugins/
 
     - name: Zip packages
       run: |
         mkdir build
-        7za a -r build/mge-classelo.zip addons/
-        ls -la
-        pwd
+        7za a -r build/mge-classelo.zip plugins/
+        unzip -l build/mge-classelo.zip
+        test "$(unzip -Z1 build/mge-classelo.zip | grep -c '\.smx$')" -ge 1
 
     - name: Release
       uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
       with:
+        tag_name: ${{ github.event.inputs.tag || github.ref_name }}
         files: |
           ./build/mge-classelo.zip
         fail_on_unmatched_files: true
