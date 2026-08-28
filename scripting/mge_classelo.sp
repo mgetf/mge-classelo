@@ -11,9 +11,7 @@
 #include <clientprefs>
 #include <mge>
 
-#define DEBUG 0
-
-#define PLUGIN_VERSION "0.4"
+#define PLUGIN_VERSION "0.5"
 #define DEFAULT_CLASS_ELO 1600
 #define MAX_TF_CLASSES 10
 #define MAXARENAS 63
@@ -98,13 +96,11 @@ public void OnPluginStart()
 
     HookEvent("player_changeclass", Event_PlayerChangeClass, EventHookMode_Post);
     HookEvent("player_spawn", Event_PlayerSpawn, EventHookMode_Post);
+    AddCommandListener(Listener_JoinClass, "joinclass");
+    AddCommandListener(Listener_JoinClass, "join_class");
 
     for (int i = 0; i <= MaxClients; i++)
         ResetClientState(i);
-
-#if DEBUG
-    ClassElo_Log("lifecycle", "OnPluginStart version=%s maxclients=%d", PLUGIN_VERSION, MaxClients);
-#endif
 
     PrepareSQL();
 
@@ -136,38 +132,20 @@ void OnRatingConVarChanged(ConVar convar, const char[] oldValue, const char[] ne
 
 public void OnPluginEnd()
 {
-#if DEBUG
-    ClassElo_Log("lifecycle", "OnPluginEnd clearing duel class lists");
-#endif
+    RemoveCommandListener(Listener_JoinClass, "joinclass");
+    RemoveCommandListener(Listener_JoinClass, "join_class");
     for (int i = 0; i <= MaxClients; i++)
         ClearDuelClasses(i);
 }
 
-#if DEBUG
-public void OnMapStart()
-{
-    ClassElo_Log("lifecycle", "OnMapStart db=%s", g_DB == null ? "null" : "ok");
-}
-#endif
 
 public void OnClientPutInServer(int client)
 {
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("client", "PutInServer %s", who);
-#endif
     ResetClientState(client);
 }
 
 public void OnClientDisconnect(int client)
 {
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("client", "Disconnect %s tracking=%d loaded=%d",
-        who, g_bDuelTracking[client], g_bClassEloLoaded[client]);
-#endif
     ResetClientState(client);
 }
 
@@ -175,125 +153,23 @@ public void OnClientCookiesCached(int client)
 {
     if (!IsValidClient(client) || IsFakeClient(client))
     {
-#if DEBUG
-        ClassElo_Log("cookie", "skip cookies client=%d valid=%d fake=%d",
-            client, IsValidClient(client), IsValidClient(client) ? IsFakeClient(client) : false);
-#endif
         return;
     }
 
     char value[8];
     g_hShowClassEloCookie.Get(client, value, sizeof(value));
     g_bShowClassElo[client] = (value[0] == '\0' || value[0] == '1');
-
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("cookie", "cached %s raw='%s' show=%d", who, value, g_bShowClassElo[client]);
-#endif
 }
 
 public void OnClientPostAdminCheck(int client)
 {
     if (!IsValidClient(client) || IsFakeClient(client))
     {
-#if DEBUG
-        ClassElo_Log("client", "PostAdminCheck skip client=%d", client);
-#endif
         return;
     }
 
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("client", "PostAdminCheck %s -> LoadPlayerClassElo", who);
-#endif
     LoadPlayerClassElo(client);
 }
-
-#if DEBUG
-// ===== LOGGING =====
-
-void ClassElo_Log(const char[] flow, const char[] fmt, any ...)
-{
-    char message[512];
-    VFormat(message, sizeof(message), fmt, 3);
-    LogMessage("[mge_classelo][%s] %s", flow, message);
-}
-
-void ClassElo_DescribeClient(int client, char[] buf, int maxlen)
-{
-    if (client <= 0 || client > MaxClients)
-    {
-        Format(buf, maxlen, "client=%d<invalid>", client);
-        return;
-    }
-
-    char name[MAX_NAME_LENGTH];
-    char steamid[32];
-    if (IsClientConnected(client))
-        GetClientName(client, name, sizeof(name));
-    else
-        strcopy(name, sizeof(name), "?");
-
-    if (!IsClientConnected(client) || !GetClientAuthId(client, AuthId_Steam2, steamid, sizeof(steamid)))
-        strcopy(steamid, sizeof(steamid), "noauth");
-
-    Format(buf, maxlen, "%s<%d>(%s) ingame=%d fake=%d",
-        name, GetClientUserId(client), steamid,
-        IsClientInGame(client), IsFakeClient(client));
-}
-
-void ClassElo_FormatClassList(int client, char[] buffer, int maxlen)
-{
-    buffer[0] = '\0';
-    if (g_alDuelClasses[client] == null || g_alDuelClasses[client].Length == 0)
-    {
-        strcopy(buffer, maxlen, "(empty)");
-        return;
-    }
-
-    for (int i = 0; i < g_alDuelClasses[client].Length; i++)
-    {
-        char cname[16];
-        char part[32];
-        TFClassType cls = view_as<TFClassType>(g_alDuelClasses[client].Get(i));
-        ClassToName(cls, cname, sizeof(cname));
-        Format(part, sizeof(part), "%s%s(%d)",
-            (i == 0) ? "" : ",",
-            cname,
-            g_iClassElo[client][view_as<int>(cls)]);
-        StrCat(buffer, maxlen, part);
-    }
-}
-
-void ClassElo_LogClientDuelState(const char[] flow, int client, const char[] context)
-{
-    char who[96];
-    char classes[128];
-    char liveClass[16];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_FormatClassList(client, classes, sizeof(classes));
-
-    int arena = IsValidClient(client) ? MGE_GetPlayerArena(client) : 0;
-    if (IsValidClient(client))
-        ClassToName(TF2_GetPlayerClass(client), liveClass, sizeof(liveClass));
-    else
-        strcopy(liveClass, sizeof(liveClass), "n/a");
-
-    ClassElo_Log(flow, "%s %s tracking=%d loaded=%d arena=%d in_arena=%d score1=%d score2=%d classes=[%s] live_class=%s",
-        context,
-        who,
-        g_bDuelTracking[client],
-        g_bClassEloLoaded[client],
-        arena,
-        IsValidClient(client) ? MGE_IsPlayerInArena(client) : false,
-        (arena > 0) ? MGE_GetArenaScore(arena, SLOT_ONE) : -1,
-        (arena > 0) ? MGE_GetArenaScore(arena, SLOT_TWO) : -1,
-        classes,
-        liveClass);
-}
-#endif
 
 // ===== DATABASE =====
 
@@ -302,10 +178,6 @@ void PrepareSQL()
     char error[256];
     char dbConfig[64];
     g_cvDBConfig.GetString(dbConfig, sizeof(dbConfig));
-
-#if DEBUG
-    ClassElo_Log("db", "PrepareSQL config='%s' check=%d", dbConfig, SQL_CheckConfig(dbConfig));
-#endif
 
     if (strlen(dbConfig) == 0 || !SQL_CheckConfig(dbConfig))
     {
@@ -318,9 +190,6 @@ void PrepareSQL()
             LogError("[mge_classelo] Could not connect to SQLite: %s", error);
             return;
         }
-#if DEBUG
-        ClassElo_Log("db", "connected via storage-local fallback");
-#endif
     }
     else
     {
@@ -334,23 +203,11 @@ void PrepareSQL()
                 LogError("[mge_classelo] Could not connect to SQLite fallback: %s", error);
                 return;
             }
-#if DEBUG
-            ClassElo_Log("db", "connected via storage-local after primary failure");
-#endif
         }
-#if DEBUG
-        else
-        {
-            ClassElo_Log("db", "connected via config '%s'", dbConfig);
-        }
-#endif
     }
 
     char ident[16];
     g_DB.Driver.GetIdentifier(ident, sizeof(ident));
-#if DEBUG
-    ClassElo_Log("db", "driver ident=%s", ident);
-#endif
 
     char query[512];
     if (StrEqual(ident, "sqlite", false))
@@ -374,9 +231,6 @@ void PrepareSQL()
         return;
     }
 
-#if DEBUG
-    ClassElo_Log("db", "CREATE TABLE query queued");
-#endif
     g_DB.Query(SQL_OnCreateTable, query);
 }
 
@@ -388,11 +242,7 @@ void SQL_OnCreateTable(Database db, DBResultSet results, const char[] error, any
         return;
     }
 
-#if DEBUG
-    ClassElo_Log("db", "Database ready (table ensure ok)");
-#else
     LogMessage("[mge_classelo] Database ready");
-#endif
 
     AddGlickoColumnsIfMissing();
 }
@@ -429,9 +279,6 @@ void SQL_OnAddGlickoColumn(Database db, DBResultSet results, const char[] error,
     if (StrContains(error, "duplicate column", false) != -1
         || StrContains(error, "already exists", false) != -1)
     {
-#if DEBUG
-        ClassElo_Log("db", "Glicko column already present (expected on repeat starts): %s", error);
-#endif
         return;
     }
 
@@ -442,18 +289,12 @@ void LoadPlayerClassElo(int client)
 {
     if (g_DB == null || !IsValidClient(client) || IsFakeClient(client))
     {
-#if DEBUG
-        ClassElo_Log("db", "LoadPlayerClassElo SKIP client=%d db=%s", client, g_DB == null ? "null" : "ok");
-#endif
         return;
     }
 
     char steamid[32];
     if (!GetClientAuthId(client, AuthId_Steam2, steamid, sizeof(steamid)))
     {
-#if DEBUG
-        ClassElo_Log("db", "LoadPlayerClassElo SKIP no steamid client=%d", client);
-#endif
         return;
     }
 
@@ -474,11 +315,6 @@ void LoadPlayerClassElo(int client)
         "SELECT class, rating, wins, losses, rd, volatility, lastplayed FROM mge_classelo_stats WHERE steamid = '%s'",
         steamid);
 
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("db", "LoadPlayerClassElo query %s steamid=%s", who, steamid);
-#endif
 
     DataPack pack = new DataPack();
     pack.WriteCell(GetClientUserId(client));
@@ -494,9 +330,6 @@ void SQL_OnPlayerClassEloReceived(Database db, DBResultSet results, const char[]
     int client = GetClientOfUserId(userid);
     if (!IsValidClient(client))
     {
-#if DEBUG
-        ClassElo_Log("db", "Load callback SKIP client gone userid=%d", userid);
-#endif
         return;
     }
 
@@ -507,7 +340,6 @@ void SQL_OnPlayerClassEloReceived(Database db, DBResultSet results, const char[]
         return;
     }
 
-    int rows = 0;
     while (results.FetchRow())
     {
         int classIdx = results.FetchInt(0);
@@ -531,28 +363,9 @@ void SQL_OnPlayerClassEloReceived(Database db, DBResultSet results, const char[]
             g_fClassVolatility[client][classIdx] = results.FetchFloat(5);
         }
         g_iClassLastPlayed[client][classIdx] = results.FetchInt(6);
-
-        rows++;
-
-#if DEBUG
-        char who[96];
-        char cname[16];
-        ClassElo_DescribeClient(client, who, sizeof(who));
-        ClassToName(view_as<TFClassType>(classIdx), cname, sizeof(cname));
-        ClassElo_Log("db", "Load row %s class=%s rating=%d w=%d l=%d",
-            who, cname,
-            g_iClassElo[client][classIdx],
-            g_iClassWins[client][classIdx],
-            g_iClassLosses[client][classIdx]);
-#endif
     }
 
     g_bClassEloLoaded[client] = true;
-#if DEBUG
-    char whoDone[96];
-    ClassElo_DescribeClient(client, whoDone, sizeof(whoDone));
-    ClassElo_Log("db", "Load complete %s rows=%d loaded=1", whoDone, rows);
-#endif
 }
 
 void PersistClassElo(int client, TFClassType classType)
@@ -608,14 +421,6 @@ void PersistClassElo(int client, TFClassType classType)
         g_DB.Format(query, sizeof(query), "INSERT INTO mge_classelo_stats (steamid, class, rating, wins, losses, lastplayed) VALUES ('%s', %d, %d, %d, %d, %d) ON DUPLICATE KEY UPDATE rating = VALUES(rating), wins = VALUES(wins), losses = VALUES(losses), lastplayed = VALUES(lastplayed)", steamid, classIdx, rating, wins, losses, timestamp);
     }
 
-#if DEBUG
-    char who[96];
-    char cname[16];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassToName(classType, cname, sizeof(cname));
-    ClassElo_Log("db", "Persist queued %s steamid=%s class=%s rating=%d w=%d l=%d driver=%s",
-        who, steamid, cname, rating, wins, losses, ident);
-#endif
     g_DB.Query(SQL_OnGenericQuery, query);
 }
 
@@ -623,10 +428,6 @@ void SQL_OnGenericQuery(Database db, DBResultSet results, const char[] error, an
 {
     if (results == null)
         LogError("[mge_classelo] Query failed: %s", error);
-#if DEBUG
-    else
-        ClassElo_Log("db", "Query ok");
-#endif
 }
 
 // ===== CLASS TRACKING =====
@@ -636,25 +437,15 @@ void ClearDuelClasses(int client)
     if (client < 0 || client > MaxClients)
         return;
 
-#if DEBUG
-    bool had = (g_alDuelClasses[client] != null || g_bDuelTracking[client]);
-#endif
     delete g_alDuelClasses[client];
     g_alDuelClasses[client] = null;
     g_bDuelTracking[client] = false;
-#if DEBUG
-    if (had)
-        ClassElo_Log("track", "ClearDuelClasses client=%d", client);
-#endif
 }
 
 void BeginDuelClassTracking(int client)
 {
     if (!IsValidClient(client))
     {
-#if DEBUG
-        ClassElo_Log("track", "BeginDuel SKIP invalid client=%d", client);
-#endif
         return;
     }
 
@@ -665,10 +456,6 @@ void BeginDuelClassTracking(int client)
     TFClassType current = TF2_GetPlayerClass(client);
     if (current != TFClass_Unknown)
         g_alDuelClasses[client].Push(view_as<int>(current));
-
-#if DEBUG
-    ClassElo_LogClientDuelState("track", client, "BeginDuel");
-#endif
 }
 
 void RecordClassChange(int client, TFClassType newClass)
@@ -695,18 +482,8 @@ void RecordClassChange(int client, TFClassType newClass)
     {
         if (g_alDuelClasses[client].Length == 0)
             g_alDuelClasses[client].Push(newIdx);
-        else
+        else if (g_alDuelClasses[client].Get(0) != newIdx)
             g_alDuelClasses[client].Set(0, newIdx);
-#if DEBUG
-        char who[96];
-        char cname[16];
-        char classes[128];
-        ClassElo_DescribeClient(client, who, sizeof(who));
-        ClassToName(newClass, cname, sizeof(cname));
-        ClassElo_FormatClassList(client, classes, sizeof(classes));
-        ClassElo_Log("track", "RecordClassChange pre-score replace %s arena=%d score=%d-%d new=%s classes=[%s]",
-            who, arena_index, score1, score2, cname, classes);
-#endif
         return;
     }
 
@@ -718,19 +495,7 @@ void RecordClassChange(int client, TFClassType newClass)
     }
 
     if (g_alDuelClasses[client].FindValue(newIdx) == -1)
-    {
         g_alDuelClasses[client].Push(newIdx);
-#if DEBUG
-        char who[96];
-        char cname[16];
-        char classes[128];
-        ClassElo_DescribeClient(client, who, sizeof(who));
-        ClassToName(newClass, cname, sizeof(cname));
-        ClassElo_FormatClassList(client, classes, sizeof(classes));
-        ClassElo_Log("track", "RecordClassChange mid-duel SWITCH %s arena=%d score=%d-%d new=%s classes=[%s]",
-            who, arena_index, score1, score2, cname, classes);
-#endif
-    }
 }
 
 bool DidPlayerSwitchClass(int client)
@@ -774,15 +539,7 @@ public void Event_PlayerChangeClass(Event event, const char[] name, bool dontBro
     if (!IsValidClient(client) || IsFakeClient(client))
         return;
 
-    TFClassType newClass = view_as<TFClassType>(event.GetInt("class"));
-#if DEBUG
-    char who[96];
-    char cname[16];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassToName(newClass, cname, sizeof(cname));
-    ClassElo_Log("event", "player_changeclass %s class=%s tracking=%d", who, cname, g_bDuelTracking[client]);
-#endif
-    RecordClassChange(client, newClass);
+    RecordClassChange(client, view_as<TFClassType>(event.GetInt("class")));
 }
 
 public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
@@ -792,47 +549,49 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
         return;
 
     TFClassType cls = TF2_GetPlayerClass(client);
-#if DEBUG
-    char who[96];
-    char cname[16];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassToName(cls, cname, sizeof(cname));
-    ClassElo_Log("event", "player_spawn (tracking) %s class=%s", who, cname);
-#endif
     RecordClassChange(client, cls);
+}
+
+Action Listener_JoinClass(int client, const char[] command, int argc)
+{
+    if (client <= 0 || !IsValidClient(client) || IsFakeClient(client))
+        return Plugin_Continue;
+
+    char classArg[32];
+    if (argc >= 1)
+        GetCmdArg(1, classArg, sizeof(classArg));
+    else
+        classArg[0] = '\0';
+
+    if (!g_bDuelTracking[client])
+        return Plugin_Continue;
+
+    TFClassType requested = TF2_GetClass(classArg);
+    int arena_index = MGE_GetPlayerArena(client);
+    bool scoreStarted = (arena_index > 0
+        && (MGE_GetArenaScore(arena_index, SLOT_ONE) != 0 || MGE_GetArenaScore(arena_index, SLOT_TWO) != 0));
+
+    if (requested != TFClass_Unknown && !scoreStarted)
+        RecordClassChange(client, requested);
+
+    RequestFrame(Frame_RecordLiveClass, GetClientUserId(client));
+    return Plugin_Continue;
+}
+
+void Frame_RecordLiveClass(int userid)
+{
+    int client = GetClientOfUserId(userid);
+    if (!IsValidClient(client) || IsFakeClient(client))
+        return;
+
+    RecordClassChange(client, TF2_GetPlayerClass(client));
 }
 
 public void MGE_On1v1MatchStart(int arena_index, int player1, int player2)
 {
-#if DEBUG
-    char p1[96];
-    char p2[96];
-    ClassElo_DescribeClient(player1, p1, sizeof(p1));
-    ClassElo_DescribeClient(player2, p2, sizeof(p2));
-    ClassElo_Log("match", "On1v1MatchStart arena=%d p1=%s p2=%s gamemode4=%d",
-        arena_index, p1, p2, MGE_ArenaHasGameMode(arena_index, MGE_GAMEMODE_4PLAYER));
-#endif
-
     BeginDuelClassTracking(player1);
     BeginDuelClassTracking(player2);
 }
-
-#if DEBUG
-public void MGE_On1v1MatchEnd(int arena_index, int winner, int loser, int winner_score, int loser_score)
-{
-    char w[96];
-    char l[96];
-    ClassElo_DescribeClient(winner, w, sizeof(w));
-    ClassElo_DescribeClient(loser, l, sizeof(l));
-    ClassElo_Log("match", "On1v1MatchEnd arena=%d score=%d-%d winner=%s loser=%s pending=%d pendW=%d pendL=%d",
-        arena_index, winner_score, loser_score, w, l,
-        g_bPendingClassElo[arena_index],
-        g_iPendingWinner[arena_index],
-        g_iPendingLoser[arena_index]);
-    ClassElo_LogClientDuelState("match", winner, "end-winner");
-    ClassElo_LogClientDuelState("match", loser, "end-loser");
-}
-#endif
 
 // ===== RATING ENGINE DISPATCHER (Elo default, Glicko-2 opt-in) =====
 //
@@ -857,14 +616,11 @@ void ClassRating_ReportResult(int winner, TFClassType winnerClass, int loser, TF
 }
 
 // Returns the number to show/print for a player's class rating, regardless of active engine.
-// Elo: the raw per-class rating. Glicko-2: a conservative rating (rating - 2*rd).
+// Always the stored rating. Glicko-2 uncertainty is the HUD "?" via ClassRating_IsProvisional,
+// not a subtracted display value. Same rule as MGEMod's Rating_GetDisplayValue.
 int ClassRating_GetDisplayValue(int client, TFClassType classType)
 {
-    int classIdx = view_as<int>(classType);
-    if (g_eClassRatingEngine == CLASS_RATING_ENGINE_GLICKO2 && g_bClassGlickoSeeded[client][classIdx])
-        return RoundToNearest(float(g_iClassElo[client][classIdx]) - 2.0 * g_fClassRD[client][classIdx]);
-
-    return g_iClassElo[client][classIdx];
+    return g_iClassElo[client][view_as<int>(classType)];
 }
 
 // Whether this player's per-class rating is still provisional (not enough duels in this
@@ -904,17 +660,6 @@ void ClassEngine_Elo_OnMatchResult(int winner, TFClassType winnerClass, int lose
     g_iClassWins[winner][wIdx]++;
     g_iClassLosses[loser][lIdx]++;
 
-#if DEBUG
-    char w[96], l[96], wc[16], lc[16];
-    ClassElo_DescribeClient(winner, w, sizeof(w));
-    ClassElo_DescribeClient(loser, l, sizeof(l));
-    ClassToName(winnerClass, wc, sizeof(wc));
-    ClassToName(loserClass, lc, sizeof(lc));
-    ClassElo_Log("compute", "APPLIED(elo) winner=%s class=%s %d+%d=%d (k=%d) | loser=%s class=%s %d-%d=%d (k=%d) expected=%.4f",
-        w, wc, winnerRating, winnerDelta, g_iClassElo[winner][wIdx], kWin,
-        l, lc, loserRating, loserDelta, g_iClassElo[loser][lIdx], kLose,
-        expected);
-#endif
 }
 
 // ===== GLICKO-2 ENGINE =====
@@ -1071,10 +816,6 @@ void ClassEngine_Glicko2_OnMatchResult(int winner, TFClassType winnerClass, int 
     int loserPreviousRating = g_iClassElo[loser][lIdx];
     float winnerPreviousRd = g_fClassRD[winner][wIdx];
     float loserPreviousRd = g_fClassRD[loser][lIdx];
-#if DEBUG
-    float winnerPreviousVolatility = g_fClassVolatility[winner][wIdx];
-    float loserPreviousVolatility = g_fClassVolatility[loser][lIdx];
-#endif
 
     float newWinnerRating, newWinnerRd, newWinnerVolatility;
     float newLoserRating, newLoserRd, newLoserVolatility;
@@ -1097,28 +838,12 @@ void ClassEngine_Glicko2_OnMatchResult(int winner, TFClassType winnerClass, int 
     g_iClassWins[winner][wIdx]++;
     g_iClassLosses[loser][lIdx]++;
 
-#if DEBUG
-    char w[96], l[96], wc[16], lc[16];
-    ClassElo_DescribeClient(winner, w, sizeof(w));
-    ClassElo_DescribeClient(loser, l, sizeof(l));
-    ClassToName(winnerClass, wc, sizeof(wc));
-    ClassToName(loserClass, lc, sizeof(lc));
-    ClassElo_Log("compute", "APPLIED(glicko2) winner=%s class=%s rating %d->%d rd %.1f->%.1f vol %.5f->%.5f | loser=%s class=%s rating %d->%d rd %.1f->%.1f vol %.5f->%.5f",
-        w, wc, winnerPreviousRating, g_iClassElo[winner][wIdx], winnerPreviousRd, g_fClassRD[winner][wIdx], winnerPreviousVolatility, g_fClassVolatility[winner][wIdx],
-        l, lc, loserPreviousRating, g_iClassElo[loser][lIdx], loserPreviousRd, g_fClassRD[loser][lIdx], loserPreviousVolatility, g_fClassVolatility[loser][lIdx]);
-#endif
 }
 
 // ===== ELO CALCULATION =====
 
 public void MGE_OnPlayerELOChange(int client, int old_elo, int new_elo, int arena_index)
 {
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("elo", "OnPlayerELOChange arena=%d %s old=%d new=%d delta=%d",
-        arena_index, who, old_elo, new_elo, new_elo - old_elo);
-#endif
 
     if (arena_index < 1 || arena_index > MAXARENAS)
         return;
@@ -1130,12 +855,6 @@ public void MGE_OnPlayerELOChange(int client, int old_elo, int new_elo, int aren
         return;
 
     // MGE CalcELO fires winner then loser; pair roles by that call order.
-#if DEBUG
-    if (new_elo == old_elo)
-        ClassElo_Log("elo", "NOTE elo unchanged (still paired by call order) arena=%d %s", arena_index, who);
-
-    ClassElo_LogClientDuelState("elo", client, (new_elo >= old_elo) ? "elo-first-or-gain" : "elo-loss");
-#endif
 
     if (!g_bPendingClassElo[arena_index])
     {
@@ -1143,29 +862,16 @@ public void MGE_OnPlayerELOChange(int client, int old_elo, int new_elo, int aren
         g_iPendingWinner[arena_index] = client;
         g_iPendingLoser[arena_index] = 0;
 
-#if DEBUG
-        ClassElo_Log("elo", "pending START arena=%d role=winner(first-call) winner=%d loser=%d -> RequestFrame",
-            arena_index, g_iPendingWinner[arena_index], g_iPendingLoser[arena_index]);
-#endif
         RequestFrame(Frame_ProcessClassElo, arena_index);
     }
     else if (client != g_iPendingWinner[arena_index])
     {
         g_iPendingLoser[arena_index] = client;
-#if DEBUG
-        ClassElo_Log("elo", "pending UPDATE arena=%d role=loser(second-call) winner=%d loser=%d",
-            arena_index, g_iPendingWinner[arena_index], g_iPendingLoser[arena_index]);
-#endif
     }
 }
 
 void Frame_ProcessClassElo(int arena_index)
 {
-#if DEBUG
-    ClassElo_Log("compute", "Frame_ProcessClassElo ENTER arena=%d pending=%d winner=%d loser=%d",
-        arena_index, g_bPendingClassElo[arena_index],
-        g_iPendingWinner[arena_index], g_iPendingLoser[arena_index]);
-#endif
 
     if (arena_index < 1 || arena_index > MAXARENAS)
         return;
@@ -1182,10 +888,6 @@ void Frame_ProcessClassElo(int arena_index)
 
     if (!IsValidClient(winner) || !IsValidClient(loser))
     {
-#if DEBUG
-        ClassElo_Log("compute", "SKIP missing pair arena=%d winner=%d(valid=%d) loser=%d(valid=%d)",
-            arena_index, winner, IsValidClient(winner), loser, IsValidClient(loser));
-#endif
         if (IsValidClient(winner))
             ClearDuelClasses(winner);
         if (IsValidClient(loser))
@@ -1202,10 +904,6 @@ void Frame_ProcessClassElo(int arena_index)
 
     if (!g_bClassEloLoaded[winner] || !g_bClassEloLoaded[loser])
     {
-#if DEBUG
-        ClassElo_Log("compute", "SKIP ratings not loaded arena=%d winner_loaded=%d loser_loaded=%d",
-            arena_index, g_bClassEloLoaded[winner], g_bClassEloLoaded[loser]);
-#endif
         ClearDuelClasses(winner);
         ClearDuelClasses(loser);
         return;
@@ -1214,16 +912,9 @@ void Frame_ProcessClassElo(int arena_index)
     bool winnerSwitched = DidPlayerSwitchClass(winner);
     bool loserSwitched = DidPlayerSwitchClass(loser);
 
-#if DEBUG
-    ClassElo_LogClientDuelState("compute", winner, "pre-winner");
-    ClassElo_LogClientDuelState("compute", loser, "pre-loser");
-#endif
 
     if (winnerSwitched)
     {
-#if DEBUG
-        ClassElo_Log("compute", "VOID winner switched mid-duel arena=%d", arena_index);
-#endif
         ClearDuelClasses(winner);
         ClearDuelClasses(loser);
         return;
@@ -1232,20 +923,9 @@ void Frame_ProcessClassElo(int arena_index)
     TFClassType winnerClass = GetStartingClass(winner);
     TFClassType loserClass = loserSwitched ? GetHighestRatedUsedClass(loser) : GetStartingClass(loser);
 
-#if DEBUG
-    if (loserSwitched)
-    {
-        char lc[16];
-        ClassToName(loserClass, lc, sizeof(lc));
-        ClassElo_Log("compute", "loser switched -> debit highest-rated class=%s", lc);
-    }
-#endif
 
     if (winnerClass == TFClass_Unknown || loserClass == TFClass_Unknown)
     {
-#if DEBUG
-        ClassElo_Log("compute", "SKIP unknown class arena=%d", arena_index);
-#endif
         ClearDuelClasses(winner);
         ClearDuelClasses(loser);
         return;
@@ -1266,17 +946,6 @@ void Frame_ProcessClassElo(int arena_index)
     int winnerDelta = winnerDisplayAfter - winnerDisplayBefore;
     int loserDelta = loserDisplayBefore - loserDisplayAfter;
 
-#if DEBUG
-    char w[96];
-    char l[96];
-    ClassElo_DescribeClient(winner, w, sizeof(w));
-    ClassElo_DescribeClient(loser, l, sizeof(l));
-    ClassElo_Log("compute", "REPORTED arena=%d winner=%s class=%s %d->%d (%+d) | loser=%s class=%s %d->%d (%+d) loser_switched=%d",
-        arena_index,
-        w, wc, winnerDisplayBefore, winnerDisplayAfter, winnerDelta,
-        l, lc, loserDisplayBefore, loserDisplayAfter, -loserDelta,
-        loserSwitched);
-#endif
 
     PersistClassElo(winner, winnerClass);
     PersistClassElo(loser, loserClass);
@@ -1289,9 +958,6 @@ void Frame_ProcessClassElo(int arena_index)
 
     ClearDuelClasses(winner);
     ClearDuelClasses(loser);
-#if DEBUG
-    ClassElo_Log("compute", "Frame_ProcessClassElo DONE arena=%d", arena_index);
-#endif
 }
 
 // ===== HUD =====
@@ -1314,8 +980,13 @@ void ApplyClassEloDisplay(MGEHudLineInfo info)
     if (info.arena_index < 1 || MGE_ArenaHasGameMode(info.arena_index, MGE_GAMEMODE_4PLAYER))
         return;
 
+    bool scoreStarted = (MGE_GetArenaScore(info.arena_index, SLOT_ONE) != 0
+        || MGE_GetArenaScore(info.arena_index, SLOT_TWO) != 0);
+
     TFClassType cls;
-    if (g_bDuelTracking[player] && g_alDuelClasses[player] != null && g_alDuelClasses[player].Length > 0)
+    if (!scoreStarted)
+        cls = TF2_GetPlayerClass(player);
+    else if (g_bDuelTracking[player] && g_alDuelClasses[player] != null && g_alDuelClasses[player].Length > 0)
         cls = GetStartingClass(player);
     else
         cls = TF2_GetPlayerClass(player);
@@ -1343,11 +1014,6 @@ Action Command_ToggleClassElo(int client, int args)
     g_bShowClassElo[client] = !g_bShowClassElo[client];
     g_hShowClassEloCookie.Set(client, g_bShowClassElo[client] ? "1" : "0");
 
-#if DEBUG
-    char who[96];
-    ClassElo_DescribeClient(client, who, sizeof(who));
-    ClassElo_Log("cmd", "sm_classelo %s show=%d", who, g_bShowClassElo[client]);
-#endif
     PrintToChat(client, "[Class ELO] Display %s", g_bShowClassElo[client] ? "enabled" : "disabled");
     return Plugin_Handled;
 }

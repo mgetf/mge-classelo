@@ -41,7 +41,7 @@ The plugin listens for `MGE_OnPlayerELOChange` rather than `MGE_On1v1MatchEnd`, 
 Per-class ratings support two pluggable rating engines, selected via `mge_classelo_rating_engine`. This is fully independent from MGEMod core's own `mgemod_rating_engine` - either plugin can run Elo while the other runs Glicko-2, with no conflict.
 
 * **Elo (default)**: the original K-factor formula this plugin has always used. Zero behavior change.
-* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core.
+* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core. HUD and chat always show the raw stored class rating. Glicko-2 uncertainty is the `?` suffix when the class is provisional, not a subtracted display value.
 
 The calibration defaults are deliberately different from MGEMod core's Glicko-2 engine, because a single class is played far less often than the game overall (a player might have 500 global duels but only 20 as an off-meta class). With the same inactivity window as the global engine, a settled per-class rating could get marked "provisional" again just from a couple of weeks of not queueing that class. `mge_classelo_glicko_period_days` defaults to a wider window (7 days instead of 1) and `mge_classelo_glicko_provisional_rd` defaults slightly looser (250 instead of 200) to account for this.
 
