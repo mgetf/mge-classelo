@@ -11,7 +11,7 @@
 #include <clientprefs>
 #include <mge>
 
-#define PLUGIN_VERSION "0.5"
+#define PLUGIN_VERSION "0.6"
 #define DEFAULT_CLASS_ELO 1600
 #define MAX_TF_CLASSES 10
 #define MAXARENAS 63
@@ -27,6 +27,8 @@ public Plugin myinfo =
 
 Database g_DB;
 ConVar g_cvDBConfig;
+bool g_bSQLReady;
+bool g_bSQLConnecting;
 
 // ===== RATING ENGINE (Elo default, Glicko-2 opt-in) =====
 
@@ -77,7 +79,7 @@ int g_iPendingLoser[MAXARENAS + 1];
 
 public void OnPluginStart()
 {
-    g_cvDBConfig = CreateConVar("mge_classelo_dbconfig", "mgemod", "Name of databases.cfg entry for class ELO storage");
+    g_cvDBConfig = CreateConVar("mge_classelo_dbconfig", "mge_classelo", "Name of the databases.cfg entry used for class ELO storage. Must exist and be reachable; the plugin will not start without it.");
 
     g_cvRatingEngine = CreateConVar("mge_classelo_rating_engine", "elo", "Rating engine used to score per-class duels: \"elo\" (default) or \"glicko2\" (opt-in). Independent from MGEMod core's own mgemod_rating_engine.");
     g_cvGlickoTau = CreateConVar("mge_classelo_glicko_tau", "0.5", "Glicko-2 system constant controlling how fast per-class volatility reacts to surprising results. Only used when mge_classelo_rating_engine is \"glicko2\".", FCVAR_NONE, true, 0.2, true, 1.2);
@@ -102,16 +104,21 @@ public void OnPluginStart()
     for (int i = 0; i <= MaxClients; i++)
         ResetClientState(i);
 
-    PrepareSQL();
-
     for (int i = 1; i <= MaxClients; i++)
     {
         if (IsClientInGame(i) && !IsFakeClient(i) && AreClientCookiesCached(i))
             OnClientCookiesCached(i);
-
-        if (IsClientInGame(i) && !IsFakeClient(i) && IsClientAuthorized(i))
-            LoadPlayerClassElo(i);
     }
+}
+
+public void OnConfigsExecuted()
+{
+    ReadRatingConVars();
+
+    if (g_bSQLReady || g_bSQLConnecting)
+        return;
+
+    PrepareSQL();
 }
 
 void ReadRatingConVars()
@@ -136,6 +143,11 @@ public void OnPluginEnd()
     RemoveCommandListener(Listener_JoinClass, "join_class");
     for (int i = 0; i <= MaxClients; i++)
         ClearDuelClasses(i);
+
+    delete g_DB;
+    g_DB = null;
+    g_bSQLReady = false;
+    g_bSQLConnecting = false;
 }
 
 
@@ -179,32 +191,16 @@ void PrepareSQL()
     char dbConfig[64];
     g_cvDBConfig.GetString(dbConfig, sizeof(dbConfig));
 
-    if (strlen(dbConfig) == 0 || !SQL_CheckConfig(dbConfig))
-    {
-        if (strlen(dbConfig) > 0)
-            LogMessage("[mge_classelo] Database config '%s' not found, falling back to storage-local", dbConfig);
+    if (dbConfig[0] == '\0')
+        SetFailState("[mge_classelo] mge_classelo_dbconfig is empty");
 
-        g_DB = SQL_Connect("storage-local", true, error, sizeof(error));
-        if (g_DB == null)
-        {
-            LogError("[mge_classelo] Could not connect to SQLite: %s", error);
-            return;
-        }
-    }
-    else
-    {
-        g_DB = SQL_Connect(dbConfig, true, error, sizeof(error));
-        if (g_DB == null)
-        {
-            LogError("[mge_classelo] Could not connect to '%s': %s - falling back to storage-local", dbConfig, error);
-            g_DB = SQL_Connect("storage-local", true, error, sizeof(error));
-            if (g_DB == null)
-            {
-                LogError("[mge_classelo] Could not connect to SQLite fallback: %s", error);
-                return;
-            }
-        }
-    }
+    if (!SQL_CheckConfig(dbConfig))
+        SetFailState("[mge_classelo] databases.cfg has no '%s' entry", dbConfig);
+
+    g_bSQLConnecting = true;
+    g_DB = SQL_Connect(dbConfig, true, error, sizeof(error));
+    if (g_DB == null)
+        SetFailState("[mge_classelo] Could not connect to '%s': %s", dbConfig, error);
 
     char ident[16];
     g_DB.Driver.GetIdentifier(ident, sizeof(ident));
@@ -225,10 +221,7 @@ void PrepareSQL()
     }
     else
     {
-        LogError("[mge_classelo] Unsupported database type: %s", ident);
-        delete g_DB;
-        g_DB = null;
-        return;
+        SetFailState("[mge_classelo] Unsupported database type '%s' for config '%s'", ident, dbConfig);
     }
 
     g_DB.Query(SQL_OnCreateTable, query);
@@ -237,14 +230,23 @@ void PrepareSQL()
 void SQL_OnCreateTable(Database db, DBResultSet results, const char[] error, any data)
 {
     if (results == null)
-    {
-        LogError("[mge_classelo] Failed to create table: %s", error);
-        return;
-    }
+        SetFailState("[mge_classelo] Failed to create table: %s", error);
 
+    g_bSQLReady = true;
+    g_bSQLConnecting = false;
     LogMessage("[mge_classelo] Database ready");
 
     AddGlickoColumnsIfMissing();
+    LoadConnectedPlayers();
+}
+
+void LoadConnectedPlayers()
+{
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsClientInGame(i) && !IsFakeClient(i) && IsClientAuthorized(i))
+            LoadPlayerClassElo(i);
+    }
 }
 
 // Adds the rd/volatility columns for installs that created the table before Glicko-2 support
@@ -885,6 +887,15 @@ void Frame_ProcessClassElo(int arena_index)
     g_bPendingClassElo[arena_index] = false;
     g_iPendingWinner[arena_index] = 0;
     g_iPendingLoser[arena_index] = 0;
+
+    if (g_DB == null)
+    {
+        if (IsValidClient(winner))
+            ClearDuelClasses(winner);
+        if (IsValidClient(loser))
+            ClearDuelClasses(loser);
+        return;
+    }
 
     if (!IsValidClient(winner) || !IsValidClient(loser))
     {

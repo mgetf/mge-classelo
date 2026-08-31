@@ -49,7 +49,7 @@ The calibration defaults are deliberately different from MGEMod core's Glicko-2 
 
 | ConVar | Default | Description |
 |---|---|---|
-| `mge_classelo_dbconfig` | `mgemod` | Name of the `databases.cfg` entry to use. Falls back to SQLite (`storage-local`) if not found. |
+| `mge_classelo_dbconfig` | `mge_classelo` | Name of the `databases.cfg` entry to use. The plugin waits until `server.cfg` has been applied before connecting. If that entry is missing or unreachable, the plugin fails to load. There is no SQLite fallback. |
 | `mge_classelo_rating_engine` | `elo` | Rating engine used to score per-class duels: `elo` (default) or `glicko2` (opt-in). |
 | `mge_classelo_glicko_tau` | `0.5` | Glicko-2 system constant controlling how fast per-class volatility reacts to surprising results. Only used when `mge_classelo_rating_engine` is `glicko2`. |
 | `mge_classelo_glicko_period_days` | `7.0` | Days considered one Glicko-2 rating period for per-class RD inflation due to inactivity. Only used when `mge_classelo_rating_engine` is `glicko2`. |
@@ -59,7 +59,8 @@ The calibration defaults are deliberately different from MGEMod core's Glicko-2 
 
 1. Make sure MGEMod is installed and includes the HUD forwards this plugin depends on.
 2. Drop `plugins/mge_classelo.smx` into your server's `addons/sourcemod/plugins/` folder.
-3. (Optional) Set `mge_classelo_dbconfig` if you want class ELO stored in a specific database config other than the default `mgemod` entry.
+3. Add a `"mge_classelo"` block to `addons/sourcemod/configs/databases.cfg` pointing at the dedicated class-ELO database.
+4. Keep `mge_classelo_dbconfig "mge_classelo"` in `server.cfg` (that is also the plugin default). The plugin reads this after configs execute, so `server.cfg` wins over the compiled default.
 
 ## Building from source
 
