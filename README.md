@@ -41,7 +41,7 @@ The plugin listens for `MGE_On1v1MatchEnd` (frag-limit, forfeit, bball, and koth
 Per-class ratings support two pluggable rating engines, selected via `mge_classelo_rating_engine`. This is fully independent from MGEMod core's own `mgemod_rating_engine` - either plugin can run Elo while the other runs Glicko-2, with no conflict.
 
 * **Elo (default)**: the original K-factor formula this plugin has always used. Zero behavior change. Live per duel.
-* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core. Period length and close phase match MGEMod (`mge_classelo_glicko_period_hours` plus hour/minute/utc_offset). Each class is sealed on its own from `mge_classelo_duels` rows for that `(steamid, class)`. HUD wraps MGEMod's `extraDisplay` and appends `/~1850` while that class is dirty, or `/1850` after seal. `?` still means provisional **sealed** class RD. Close uses lock name `mge_classelo_period_close` so it does not queue behind overall MGEMod close.
+* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core. Period length and close phase match MGEMod (`mge_classelo_glicko_period_hours` plus hour/minute/utc_offset). Each class is sealed on its own from `mge_classelo_duels` rows for that `(steamid, class)`. HUD wraps MGEMod's `extraDisplay` and appends `/~1850` while that class is dirty, or `/1850` after seal. `?` still means provisional **sealed** class RD. Close only runs when `mge_classelo_glicko_period_close` is `1` (the localhost DB host). Lock name `mge_classelo_period_close` so it does not queue behind overall MGEMod close.
 
 Unused classes do **not** gain RD every 24h. `mge_classelo_glicko_period_days` stays the inactivity window (default 7). A class with no games in this window inflates RD only after that many days since `lastplayed`. A never-played class has no row.
 
@@ -60,6 +60,7 @@ The calibration defaults are deliberately different from MGEMod core's Glicko-2 
 | `mge_classelo_glicko_period_hour` | `8` | Local hour (0-23) of the class period boundary. Match MGEMod. |
 | `mge_classelo_glicko_period_minute` | `20` | Local minute (0-59) of the class period boundary. Match MGEMod. |
 | `mge_classelo_glicko_period_utc_offset` | `-3` | Hours added to UTC to get local time for the class period boundary (ART is -3). |
+| `mge_classelo_glicko_period_close` | `0` | This instance runs per-class period close. Set `1` only on the srcds that shares the box with MariaDB (localhost). Other game servers in the region leave this at `0`. Third-party single-server installs set it to `1`. Only used when `mge_classelo_rating_engine` is `glicko2`. |
 | `mge_classelo_glicko_period_days` | `7.0` | Days of inactivity before an unused class gets one period of RD inflation. Daily close does not inflate unused classes every 24h. Only used when `mge_classelo_rating_engine` is `glicko2`. |
 | `mge_classelo_glicko_provisional_rd` | `250.0` | RD threshold above which a per-class Glicko-2 rating is considered provisional (shown with a `?` suffix on the HUD). Only used when `mge_classelo_rating_engine` is `glicko2`. |
 
@@ -70,7 +71,7 @@ The calibration defaults are deliberately different from MGEMod core's Glicko-2 
 3. Drop `translations/mge_classelo.phrases.txt` into `addons/sourcemod/translations/`.
 4. Add a `"mge_classelo"` block to `addons/sourcemod/configs/databases.cfg` pointing at the dedicated class-ELO database.
 5. Keep `mge_classelo_dbconfig "mge_classelo"` in `server.cfg` (that is also the plugin default). The plugin reads this after configs execute, so `server.cfg` wins over the compiled default.
-6. For Glicko-2 periods on empty boxes, keep `sv_hibernate_when_empty 0` (same as MGEMod overall).
+6. For Glicko-2 periods, set `mge_classelo_glicko_period_close 1` on the instance that shares the box with the database. Keep `sv_hibernate_when_empty 0` on that closer box (same as MGEMod overall).
 
 ## Building from source
 

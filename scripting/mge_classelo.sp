@@ -49,6 +49,7 @@ ConVar g_cvGlickoPeriodHours;
 ConVar g_cvGlickoPeriodHour;
 ConVar g_cvGlickoPeriodMinute;
 ConVar g_cvGlickoPeriodUtcOffset;
+ConVar g_cvGlickoPeriodClose;
 
 float g_fGlickoTau;
 float g_fGlickoPeriodDays;
@@ -57,6 +58,7 @@ int g_iGlickoPeriodHours;
 int g_iGlickoPeriodHour;
 int g_iGlickoPeriodMinute;
 int g_iGlickoPeriodUtcOffset;
+bool g_bClassPeriodCloseEnabled;
 char g_sClassEloDriver[16];
 bool g_bClassPeriodSchemaReady;
 bool g_bClassPeriodCloseRunning;
@@ -117,6 +119,7 @@ public void OnPluginStart()
     g_cvGlickoPeriodHour = CreateConVar("mge_classelo_glicko_period_hour", "8", "Local hour (0-23) of the class Glicko-2 period boundary. Match MGEMod.", FCVAR_NONE, true, 0.0, true, 23.0);
     g_cvGlickoPeriodMinute = CreateConVar("mge_classelo_glicko_period_minute", "20", "Local minute (0-59) of the class Glicko-2 period boundary. Match MGEMod.", FCVAR_NONE, true, 0.0, true, 59.0);
     g_cvGlickoPeriodUtcOffset = CreateConVar("mge_classelo_glicko_period_utc_offset", "-3", "Hours added to UTC to get local time for the class period boundary (ART is -3).");
+    g_cvGlickoPeriodClose = CreateConVar("mge_classelo_glicko_period_close", "0", "This instance runs per-class Glicko-2 period close. Set 1 only on the srcds that shares the box with MariaDB (localhost). Other game servers in the region leave this at 0. Only used when mge_classelo_rating_engine is \"glicko2\".", FCVAR_NONE, true, 0.0, true, 1.0);
 
     g_cvRatingEngine.AddChangeHook(OnRatingConVarChanged);
     g_cvGlickoTau.AddChangeHook(OnRatingConVarChanged);
@@ -126,6 +129,7 @@ public void OnPluginStart()
     g_cvGlickoPeriodHour.AddChangeHook(OnRatingConVarChanged);
     g_cvGlickoPeriodMinute.AddChangeHook(OnRatingConVarChanged);
     g_cvGlickoPeriodUtcOffset.AddChangeHook(OnRatingConVarChanged);
+    g_cvGlickoPeriodClose.AddChangeHook(OnRatingConVarChanged);
     ReadRatingConVars();
 
     LoadTranslations("mge_classelo.phrases");
@@ -172,6 +176,7 @@ void ReadRatingConVars()
     g_iGlickoPeriodHour = g_cvGlickoPeriodHour.IntValue;
     g_iGlickoPeriodMinute = g_cvGlickoPeriodMinute.IntValue;
     g_iGlickoPeriodUtcOffset = g_cvGlickoPeriodUtcOffset.IntValue;
+    g_bClassPeriodCloseEnabled = g_cvGlickoPeriodClose.BoolValue;
 }
 
 void OnRatingConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -242,8 +247,8 @@ void PrepareSQL()
         SetFailState("databases.cfg has no '%s' entry", dbConfig);
 
     g_bSQLConnecting = true;
-    g_DB = SQL_Connect(dbConfig, true, error, sizeof(error));
-    if (g_DB == null)
+        g_DB = SQL_Connect(dbConfig, true, error, sizeof(error));
+        if (g_DB == null)
         SetFailState("Could not connect to '%s': %s", dbConfig, error);
 
     char ident[16];
@@ -370,9 +375,9 @@ void LoadPlayerClassElo(int client)
     }
     else
     {
-        g_DB.Format(query, sizeof(query),
-            "SELECT class, rating, wins, losses, rd, volatility, lastplayed FROM mge_classelo_stats WHERE steamid = '%s'",
-            steamid);
+    g_DB.Format(query, sizeof(query),
+        "SELECT class, rating, wins, losses, rd, volatility, lastplayed FROM mge_classelo_stats WHERE steamid = '%s'",
+        steamid);
     }
 
 
@@ -471,7 +476,7 @@ void PersistClassElo(int client, TFClassType classType)
 
         if (g_bClassPeriodSchemaReady)
         {
-            if (StrEqual(ident, "sqlite", false))
+        if (StrEqual(ident, "sqlite", false))
             {
                 g_DB.Format(query, sizeof(query), "INSERT INTO mge_classelo_stats (steamid, class, rating, wins, losses, lastplayed, rd, volatility, rating_est, rd_est, period_dirty) VALUES ('%s', %d, %d, %d, %d, %d, %f, %f, %d, %f, %d) ON CONFLICT(steamid, class) DO UPDATE SET rating = excluded.rating, wins = excluded.wins, losses = excluded.losses, lastplayed = excluded.lastplayed, rd = excluded.rd, volatility = excluded.volatility, rating_est = excluded.rating_est, rd_est = excluded.rd_est, period_dirty = excluded.period_dirty", steamid, classIdx, rating, wins, losses, timestamp, rd, volatility, ratingEst, rdEst, dirty);
             }
@@ -858,8 +863,8 @@ void ClassGlicko2_ComputePeriodUpdate(float rating, float rd, float volatility, 
     {
         float oppMu = (oppRating[i] - 1500.0) / CLASS_GLICKO2_SCALE;
         float oppPhi = oppRd[i] / CLASS_GLICKO2_SCALE;
-        float g = ClassGlicko2_G(oppPhi);
-        float e = ClassGlicko2_E(mu, oppMu, oppPhi);
+    float g = ClassGlicko2_G(oppPhi);
+    float e = ClassGlicko2_E(mu, oppMu, oppPhi);
         if (e < 0.0001)
             e = 0.0001;
         else if (e > 0.9999)
@@ -1092,20 +1097,20 @@ void ProcessClassEloMatch(int arena_index, int winner, int loser)
     }
     else
     {
-        char wc[16];
-        char lc[16];
-        ClassToName(winnerClass, wc, sizeof(wc));
-        ClassToName(loserClass, lc, sizeof(lc));
+    char wc[16];
+    char lc[16];
+    ClassToName(winnerClass, wc, sizeof(wc));
+    ClassToName(loserClass, lc, sizeof(lc));
 
-        int winnerDisplayAfter = ClassRating_GetDisplayValue(winner, winnerClass);
-        int loserDisplayAfter = ClassRating_GetDisplayValue(loser, loserClass);
-        int winnerDelta = winnerDisplayAfter - winnerDisplayBefore;
-        int loserDelta = loserDisplayBefore - loserDisplayAfter;
+    int winnerDisplayAfter = ClassRating_GetDisplayValue(winner, winnerClass);
+    int loserDisplayAfter = ClassRating_GetDisplayValue(loser, loserClass);
+    int winnerDelta = winnerDisplayAfter - winnerDisplayBefore;
+    int loserDelta = loserDisplayBefore - loserDisplayAfter;
 
-        if (g_bShowClassElo[winner])
+    if (g_bShowClassElo[winner])
             MC_PrintToChat(winner, "%t", "GainedClassPoints", winnerDelta, wc, winnerDisplayAfter);
 
-        if (g_bShowClassElo[loser])
+    if (g_bShowClassElo[loser])
             MC_PrintToChat(loser, "%t", "LostClassPoints", loserDelta, lc, loserDisplayAfter);
     }
 
@@ -1448,6 +1453,9 @@ void ClassPeriod_InsertDuel(int winner, int wIdx, int loser, int lIdx, int now)
 void ClassPeriod_TryClose()
 {
     if (g_eClassRatingEngine != CLASS_RATING_ENGINE_GLICKO2 || g_DB == null || !g_bClassPeriodSchemaReady)
+        return;
+
+    if (!g_bClassPeriodCloseEnabled)
         return;
 
     if (g_bClassPeriodCloseRunning)
