@@ -1,0 +1,71 @@
+"Phrases"
+{
+	"GainedClassPoints"
+	{
+		"#format"		"{1:i},{2:s},{3:i}"
+		"en"			"{green}[MGE]{default} +{1} {2} (now {green}{3}{default})"
+		"chi"			"{green}[MGE]{default} +{1} {2} (现在 {green}{3}{default})"
+		"de"			"{green}[MGE]{default} +{1} {2} (jetzt {green}{3}{default})"
+		"ru"			"{green}[MGE]{default} +{1} {2} (сейчас {green}{3}{default})"
+		"es"			"{green}[MGE]{default} +{1} {2} (ahora {green}{3}{default})"
+		"pt"			"{green}[MGE]{default} +{1} {2} (agora {green}{3}{default})"
+	}
+	"LostClassPoints"
+	{
+		"#format"		"{1:i},{2:s},{3:i}"
+		"en"			"{green}[MGE]{default} -{1} {2} (now {green}{3}{default})"
+		"chi"			"{green}[MGE]{default} -{1} {2} (现在 {green}{3}{default})"
+		"de"			"{green}[MGE]{default} -{1} {2} (jetzt {green}{3}{default})"
+		"ru"			"{green}[MGE]{default} -{1} {2} (сейчас {green}{3}{default})"
+		"es"			"{green}[MGE]{default} -{1} {2} (ahora {green}{3}{default})"
+		"pt"			"{green}[MGE]{default} -{1} {2} (agora {green}{3}{default})"
+	}
+	"GainedClassRatingEst"
+	{
+		"#format"		"{1:i},{2:s},{3:i}"
+		"en"			"{green}[MGE]{default} +{1} {2} (now {green}~{3}{default})"
+		"chi"			"{green}[MGE]{default} +{1} {2} (现在 {green}~{3}{default})"
+		"de"			"{green}[MGE]{default} +{1} {2} (jetzt {green}~{3}{default})"
+		"ru"			"{green}[MGE]{default} +{1} {2} (сейчас {green}~{3}{default})"
+		"es"			"{green}[MGE]{default} +{1} {2} (ahora {green}~{3}{default})"
+		"pt"			"{green}[MGE]{default} +{1} {2} (agora {green}~{3}{default})"
+	}
+	"LostClassRatingEst"
+	{
+		"#format"		"{1:i},{2:s},{3:i}"
+		"en"			"{green}[MGE]{default} -{1} {2} (now {green}~{3}{default})"
+		"chi"			"{green}[MGE]{default} -{1} {2} (现在 {green}~{3}{default})"
+		"de"			"{green}[MGE]{default} -{1} {2} (jetzt {green}~{3}{default})"
+		"ru"			"{green}[MGE]{default} -{1} {2} (сейчас {green}~{3}{default})"
+		"es"			"{green}[MGE]{default} -{1} {2} (ahora {green}~{3}{default})"
+		"pt"			"{green}[MGE]{default} -{1} {2} (agora {green}~{3}{default})"
+	}
+	"HudToggle"
+	{
+		"#format"		"{1:s}"
+		"en"			"{green}[MGE]{default} Class score display is {green}{1}{default}."
+		"chi"			"{green}[MGE]{default} 类分数显示已{green}{1}{default}。"
+		"de"			"{green}[MGE]{default} Klassenscore-Anzeige ist {green}{1}{default}."
+		"ru"			"{green}[MGE]{default} Отображение классовых очков {green}{1}{default}."
+		"es"			"{green}[MGE]{default} El HUD de puntaje de clase está {green}{1}{default}."
+		"pt"			"{green}[MGE]{default} O HUD de pontuação de classe está {green}{1}{default}."
+	}
+	"EnabledLabel"
+	{
+		"en"			"enabled"
+		"chi"			"已启用"
+		"de"			"aktiviert"
+		"ru"			"включен"
+		"es"			"activado"
+		"pt"			"ativado"
+	}
+	"DisabledLabel"
+	{
+		"en"			"disabled"
+		"chi"			"已禁用"
+		"de"			"deaktiviert"
+		"ru"			"отключен"
+		"es"			"desactivado"
+		"pt"			"desativado"
+	}
+}
