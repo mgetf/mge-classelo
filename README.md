@@ -6,7 +6,7 @@ This plugin does not modify MGEMod's global ELO system. It maintains its own per
 
 ## Requirements
 
-- [MGEMod](https://github.com/mgetf/MGEMod) with the `MGE_OnFormatHudLines` HUD forward (v3.1.0-beta29 or later)
+- [MGEMod](https://github.com/mgetf/MGEMod) with `MGE_On1v1MatchEnd` on frag-limit, forfeit, bball, and koth (v3.1.0-beta36 or later)
 - SourceMod 1.11+
 
 ## How class ELO is calculated
@@ -28,7 +28,7 @@ The ELO math itself mirrors MGEMod's own formula (K=15, or K=10 once a class rat
 
 ## Coverage
 
-The plugin listens for `MGE_OnPlayerELOChange` rather than `MGE_On1v1MatchEnd`, since the latter is only fired for frag-limit-completion wins. Forfeits/early leaves, bball wins, and koth wins all update global ELO through a different code path that skips that forward, but they all still fire `MGE_OnPlayerELOChange` — so class ELO stays in sync with every path that can move global ELO.
+The plugin listens for `MGE_On1v1MatchEnd` (frag-limit, forfeit, bball, and koth 1v1 paths in MGEMod v3.1.0-beta36+). 2v2 / 4-player arenas are skipped. Elo class ratings still update live per duel. Glicko-2 class ratings log the duel and show a HUD preview until the wall-clock period seals.
 
 ## Commands
 
@@ -40,10 +40,14 @@ The plugin listens for `MGE_OnPlayerELOChange` rather than `MGE_On1v1MatchEnd`, 
 
 Per-class ratings support two pluggable rating engines, selected via `mge_classelo_rating_engine`. This is fully independent from MGEMod core's own `mgemod_rating_engine` - either plugin can run Elo while the other runs Glicko-2, with no conflict.
 
-* **Elo (default)**: the original K-factor formula this plugin has always used. Zero behavior change.
-* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core. HUD and chat always show the raw stored class rating. Glicko-2 uncertainty is the `?` suffix when the class is provisional, not a subtracted display value.
+* **Elo (default)**: the original K-factor formula this plugin has always used. Zero behavior change. Live per duel.
+* **Glicko-2 (opt-in)**: same published algorithm as MGEMod core's own opt-in engine (RD + volatility), but implemented independently for this plugin's per-class table - no shared code with MGEMod core. Period length and close phase match MGEMod (`mge_classelo_glicko_period_hours` plus hour/minute/utc_offset). Each class is sealed on its own from `mge_classelo_duels` rows for that `(steamid, class)`. HUD wraps MGEMod's `extraDisplay` and appends `/~1850` while that class is dirty, or `/1850` after seal. `?` still means provisional **sealed** class RD. Close uses lock name `mge_classelo_period_close` so it does not queue behind overall MGEMod close.
 
-The calibration defaults are deliberately different from MGEMod core's Glicko-2 engine, because a single class is played far less often than the game overall (a player might have 500 global duels but only 20 as an off-meta class). With the same inactivity window as the global engine, a settled per-class rating could get marked "provisional" again just from a couple of weeks of not queueing that class. `mge_classelo_glicko_period_days` defaults to a wider window (7 days instead of 1) and `mge_classelo_glicko_provisional_rd` defaults slightly looser (250 instead of 200) to account for this.
+Unused classes do **not** gain RD every 24h. `mge_classelo_glicko_period_days` stays the inactivity window (default 7). A class with no games in this window inflates RD only after that many days since `lastplayed`. A never-played class has no row.
+
+**Sparse classes.** Batching only helps when several games share one window. Eight engineer duels the same night become one period. Eight engineer duels on eight different days are eight one-game periods, and RD can still rise. Raising `mge_classelo_glicko_period_hours` (for example 168) is optional later, not a v1 bug.
+
+The calibration defaults are deliberately different from MGEMod core's Glicko-2 engine, because a single class is played far less often than the game overall (a player might have 500 global duels but only 20 as an off-meta class). `mge_classelo_glicko_period_days` defaults to a wider inactivity window (7 days instead of 1) and `mge_classelo_glicko_provisional_rd` defaults slightly looser (250 instead of 200) to account for this.
 
 ## ConVars
 
@@ -52,15 +56,21 @@ The calibration defaults are deliberately different from MGEMod core's Glicko-2 
 | `mge_classelo_dbconfig` | `mge_classelo` | Name of the `databases.cfg` entry to use. The plugin waits until `server.cfg` has been applied before connecting. If that entry is missing or unreachable, the plugin fails to load. There is no SQLite fallback. |
 | `mge_classelo_rating_engine` | `elo` | Rating engine used to score per-class duels: `elo` (default) or `glicko2` (opt-in). |
 | `mge_classelo_glicko_tau` | `0.5` | Glicko-2 system constant controlling how fast per-class volatility reacts to surprising results. Only used when `mge_classelo_rating_engine` is `glicko2`. |
-| `mge_classelo_glicko_period_days` | `7.0` | Days considered one Glicko-2 rating period for per-class RD inflation due to inactivity. Only used when `mge_classelo_rating_engine` is `glicko2`. |
+| `mge_classelo_glicko_period_hours` | `24` | Length of one per-class Glicko-2 rating period in hours (1-168). Match MGEMod. |
+| `mge_classelo_glicko_period_hour` | `8` | Local hour (0-23) of the class period boundary. Match MGEMod. |
+| `mge_classelo_glicko_period_minute` | `20` | Local minute (0-59) of the class period boundary. Match MGEMod. |
+| `mge_classelo_glicko_period_utc_offset` | `-3` | Hours added to UTC to get local time for the class period boundary (ART is -3). |
+| `mge_classelo_glicko_period_days` | `7.0` | Days of inactivity before an unused class gets one period of RD inflation. Daily close does not inflate unused classes every 24h. Only used when `mge_classelo_rating_engine` is `glicko2`. |
 | `mge_classelo_glicko_provisional_rd` | `250.0` | RD threshold above which a per-class Glicko-2 rating is considered provisional (shown with a `?` suffix on the HUD). Only used when `mge_classelo_rating_engine` is `glicko2`. |
 
 ## Installation
 
-1. Make sure MGEMod is installed and includes the HUD forwards this plugin depends on.
+1. Make sure MGEMod is installed and includes the HUD forwards this plugin depends on (v3.1.0-beta36 or later so bball/koth fire `MGE_On1v1MatchEnd`).
 2. Drop `plugins/mge_classelo.smx` into your server's `addons/sourcemod/plugins/` folder.
-3. Add a `"mge_classelo"` block to `addons/sourcemod/configs/databases.cfg` pointing at the dedicated class-ELO database.
-4. Keep `mge_classelo_dbconfig "mge_classelo"` in `server.cfg` (that is also the plugin default). The plugin reads this after configs execute, so `server.cfg` wins over the compiled default.
+3. Drop `translations/mge_classelo.phrases.txt` into `addons/sourcemod/translations/`.
+4. Add a `"mge_classelo"` block to `addons/sourcemod/configs/databases.cfg` pointing at the dedicated class-ELO database.
+5. Keep `mge_classelo_dbconfig "mge_classelo"` in `server.cfg` (that is also the plugin default). The plugin reads this after configs execute, so `server.cfg` wins over the compiled default.
+6. For Glicko-2 periods on empty boxes, keep `sv_hibernate_when_empty 0` (same as MGEMod overall).
 
 ## Building from source
 
@@ -69,6 +79,14 @@ spcomp -i"./scripting/include/" scripting/mge_classelo.sp -o ./plugins/mge_class
 ```
 
 `scripting/include/mge.inc` is a vendored copy of MGEMod's public API header, kept in sync with the MGEMod version this plugin targets.
+
+## Agent notes
+
+Wall-clock Glicko-2 periods, locks, leftover close, HUD `~`, sparse-class RD, and the classelo-vs-mgemod DB incident are documented in MGEMod:
+
+[docs/glicko2-24h-period-walkthrough.md](https://github.com/mgetf/MGEMod/blob/master/docs/glicko2-24h-period-walkthrough.md)
+
+classelo uses lock name `mge_classelo_period_close`, table `mge_classelo_duels`, and `GetClientAuthId` (not an MGE Steam ID native).
 
 ## License
 
